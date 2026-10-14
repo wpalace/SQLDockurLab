@@ -1,0 +1,12 @@
+# Added automatically by ./lab when /dev/vhost-net exists on the host.
+x-vhost: &vhost
+  devices:
+    - /dev/kvm
+    - /dev/net/tun
+    - /dev/vhost-net
+services:
+  dc1: *vhost
+  sql1: *vhost
+  sql2: *vhost
+  sql3: *vhost
+  sql4: *vhost

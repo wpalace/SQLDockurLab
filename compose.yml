@@ -1,0 +1,143 @@
+# sql-ag-lab runtime. Normally driven by ./lab (up/down/reset/save), which exports
+# LAB_MODE / LAB_CHECKPOINT and reads lab.env. Plain `docker compose --env-file lab.env up -d`
+# also works for the restore path, but VMs then stay PAUSED until `./lab resume`.
+name: sqlaglab
+
+x-vm: &vm
+  image: ${LAB_IMAGE:-sql-ag-lab/vm:latest}
+  init: true
+  restart: "no"
+  devices:
+    - /dev/kvm
+    - /dev/net/tun
+    # /dev/vhost-net is added by compose.vhost.yml when the host has it (./lab does this).
+  cap_add: [NET_ADMIN]
+  stop_grace_period: 3m
+  volumes:
+    - ${LAB_IMAGES_DIR:-./images}:/images
+    - ${LAB_MEDIA_DIR:-./media}:/media:ro
+
+x-env: &env
+  LAB_MODE: ${LAB_MODE:-restore}
+  LAB_CHECKPOINT: ${LAB_CHECKPOINT:-golden}
+  LAB_CPU_MODEL: ${LAB_CPU_MODEL:-host}
+  LAB_ACCEL: ${LAB_ACCEL:-kvm}
+  LAB_UNSAFE_CACHE: ${LAB_UNSAFE_CACHE:-1}
+  LAB_DEBUG: ${LAB_DEBUG:-0}
+  LAB_TEST_KERNEL: ${LAB_TEST_KERNEL:-}
+  LAB_TEST_INITRD: ${LAB_TEST_INITRD:-}
+
+services:
+  router:
+    image: ${LAB_IMAGE:-sql-ag-lab/vm:latest}
+    container_name: lab-router
+    entrypoint: ["/opt/lab/router.sh"]
+    init: true
+    restart: "no"
+    cap_add: [NET_ADMIN]
+    sysctls:
+      net.ipv4.ip_forward: "1"
+      net.ipv4.conf.all.send_redirects: "0"
+      net.ipv4.conf.default.send_redirects: "0"
+    environment:
+      LAB_NET_A_ROUTER: ${LAB_NET_A_ROUTER}
+      LAB_NET_B_ROUTER: ${LAB_NET_B_ROUTER}
+      LAB_WAN_DELAY: ${LAB_WAN_DELAY:-}
+      LAB_INTERNET: ${LAB_INTERNET:-0}
+    networks:
+      lab_a:
+        ipv4_address: ${LAB_NET_A_ROUTER}
+        mac_address: ${LAB_NET_A_ROUTER_MAC}
+      lab_b:
+        ipv4_address: ${LAB_NET_B_ROUTER}
+        mac_address: ${LAB_NET_B_ROUTER_MAC}
+
+  dc1:
+    <<: *vm
+    container_name: lab-dc1
+    environment:
+      <<: *env
+      VM_NAME: DC1
+      VM_MAC: ${DC1_MAC}
+      VM_RAM_MB: ${DC1_RAM_MB}
+      VM_CPUS: ${DC1_CPUS}
+      VM_SMBIOS_SERIAL: "LAB;DC1;${DC1_IP};${LAB_PREFIX};${LAB_NET_A_ROUTER};${DC1_IP}"
+      LAB_TEST_APPEND: "lab.ip=${DC1_IP}/${LAB_PREFIX} lab.gw=${LAB_NET_A_ROUTER}"
+    ports: ["${LAB_VNC_BIND:-127.0.0.1}:${DC1_VNC_PORT:-5911}:5900"]
+    networks:
+      lab_a: { ipv4_address: "${DC1_IP}" }
+
+  sql1:
+    <<: *vm
+    container_name: lab-sql1
+    environment:
+      <<: *env
+      VM_NAME: SQL1
+      VM_MAC: ${SQL1_MAC}
+      VM_RAM_MB: ${SQL_RAM_MB}
+      VM_CPUS: ${SQL_CPUS}
+      VM_CDROM: /media/${LAB_SQL_ISO}
+      VM_SMBIOS_SERIAL: "LAB;SQL1;${SQL1_IP};${LAB_PREFIX};${LAB_NET_A_ROUTER};${DC1_IP}"
+      LAB_TEST_APPEND: "lab.ip=${SQL1_IP}/${LAB_PREFIX} lab.gw=${LAB_NET_A_ROUTER}"
+    ports: ["${LAB_VNC_BIND:-127.0.0.1}:${SQL1_VNC_PORT:-5912}:5900"]
+    networks:
+      lab_a: { ipv4_address: "${SQL1_IP}" }
+
+  sql2:
+    <<: *vm
+    container_name: lab-sql2
+    environment:
+      <<: *env
+      VM_NAME: SQL2
+      VM_MAC: ${SQL2_MAC}
+      VM_RAM_MB: ${SQL_RAM_MB}
+      VM_CPUS: ${SQL_CPUS}
+      VM_CDROM: /media/${LAB_SQL_ISO}
+      VM_SMBIOS_SERIAL: "LAB;SQL2;${SQL2_IP};${LAB_PREFIX};${LAB_NET_A_ROUTER};${DC1_IP}"
+      LAB_TEST_APPEND: "lab.ip=${SQL2_IP}/${LAB_PREFIX} lab.gw=${LAB_NET_A_ROUTER}"
+    ports: ["${LAB_VNC_BIND:-127.0.0.1}:${SQL2_VNC_PORT:-5913}:5900"]
+    networks:
+      lab_a: { ipv4_address: "${SQL2_IP}" }
+
+  sql3:
+    <<: *vm
+    container_name: lab-sql3
+    environment:
+      <<: *env
+      VM_NAME: SQL3
+      VM_MAC: ${SQL3_MAC}
+      VM_RAM_MB: ${SQL_RAM_MB}
+      VM_CPUS: ${SQL_CPUS}
+      VM_CDROM: /media/${LAB_SQL_ISO}
+      VM_SMBIOS_SERIAL: "LAB;SQL3;${SQL3_IP};${LAB_PREFIX};${LAB_NET_B_ROUTER};${DC1_IP}"
+      LAB_TEST_APPEND: "lab.ip=${SQL3_IP}/${LAB_PREFIX} lab.gw=${LAB_NET_B_ROUTER}"
+    ports: ["${LAB_VNC_BIND:-127.0.0.1}:${SQL3_VNC_PORT:-5914}:5900"]
+    networks:
+      lab_b: { ipv4_address: "${SQL3_IP}" }
+
+  sql4:
+    <<: *vm
+    container_name: lab-sql4
+    environment:
+      <<: *env
+      VM_NAME: SQL4
+      VM_MAC: ${SQL4_MAC}
+      VM_RAM_MB: ${SQL_RAM_MB}
+      VM_CPUS: ${SQL_CPUS}
+      VM_CDROM: /media/${LAB_SQL_ISO}
+      VM_SMBIOS_SERIAL: "LAB;SQL4;${SQL4_IP};${LAB_PREFIX};${LAB_NET_B_ROUTER};${DC1_IP}"
+      LAB_TEST_APPEND: "lab.ip=${SQL4_IP}/${LAB_PREFIX} lab.gw=${LAB_NET_B_ROUTER}"
+    ports: ["${LAB_VNC_BIND:-127.0.0.1}:${SQL4_VNC_PORT:-5915}:5900"]
+    networks:
+      lab_b: { ipv4_address: "${SQL4_IP}" }
+
+# Networks are created once by `./lab net` (fixed bridge names + fixed bridge MACs) and
+# are deliberately NOT torn down on reset: guests keep ARP entries for the host gateway
+# and the router inside their saved memory state, so those MACs must never change.
+networks:
+  lab_a:
+    external: true
+    name: lab_a
+  lab_b:
+    external: true
+    name: lab_b
