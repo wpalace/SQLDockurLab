@@ -1,0 +1,26 @@
+# Example only (not installed). Copy to .github/workflows/ in the repo that holds your
+# automation. Requires a self-hosted runner ON the lab host (labels: self-hosted, sql-ag-lab),
+# whose user is in the docker group and can run `sudo -n ip link` / iptables (or run as root).
+name: sql-automation-tests
+on: [push, workflow_dispatch]
+concurrency: { group: sql-ag-lab, cancel-in-progress: false }   # one lab per host
+jobs:
+  test:
+    runs-on: [self-hosted, sql-ag-lab]
+    strategy:
+      max-parallel: 1
+      matrix:
+        suite: [failover, add-database, patching]
+    env:
+      LAB: /opt/sql-ag-lab/lab
+    steps:
+      - uses: actions/checkout@v4
+      - name: Reset lab to golden (<1 min)
+        run: $LAB reset golden
+      - name: Deep health
+        run: $LAB health --deep --wait 60
+      - name: Run suite
+        run: pwsh ./tests/${{ matrix.suite }}.Tests.ps1
+      - name: Discard lab
+        if: always()
+        run: $LAB down

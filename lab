@@ -1,0 +1,384 @@
+#!/usr/bin/env bash
+# =============================================================================
+# sql-ag-lab: 1 DC + 4-node SQL Server 2025 AG across two subnets, with
+# memory-state checkpoints for sub-minute reset.  Run `./lab help`.
+# =============================================================================
+set -Eeuo pipefail
+LAB_ROOT=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
+export PATH="$PATH:/usr/sbin:/sbin"
+# shellcheck source=lib/common.sh
+source "$LAB_ROOT/lib/common.sh"
+# shellcheck source=lib/provision.sh
+source "$LAB_ROOT/lib/provision.sh"
+
+usage() {
+  cat <<'USAGE'
+Usage: ./lab <command> [args]
+
+One-time build (slow; run once, produces checkpoints):
+  doctor                 check host prerequisites (KVM, docker, RAM, disk, media)
+  init                   doctor + build runtime image + SSH key + lab networks
+  build-base             stage 1: dockur installs + syspreps Windows Server 2025 Core (~30-60 min)
+  provision [FROM]       stage 2: DC, domain join, SQL, WSFC, AG; saves checkpoints
+                         sql-standalone, cluster, golden.  FROM resumes at a checkpoint.
+  build                  init + build-base + provision (fully unattended first build)
+
+Fast path (CI):
+  up [CKPT]              restore checkpoint (default: golden) and resume all VMs
+  down                   discard the running lab (instant; nothing is saved)
+  reset [CKPT]           down + up
+  save NAME [--force] [--up]
+                         snapshot the running lab (RAM + disks of all 5 VMs, consistently)
+  health [--deep] [--wait S]
+                         fast TCP probe, or full cluster/AG/listener check via SQL1
+  list                   list checkpoints
+  delete NAME            delete a checkpoint (refuses if others depend on it)
+
+Utilities:
+  status                 containers + VM run states
+  ssh VM [cmd]           PowerShell on a VM (DC1 SQL1 SQL2 SQL3 SQL4)
+  console VM             print the VNC address of a VM's console
+  info                   connection details (IPs, listener, credentials)
+  net                    (re)create lab networks / pin bridge MACs (idempotent)
+USAGE
+}
+
+# ------------------------------------------------------------------- doctor --
+cmd_doctor() {
+  local bad=0
+  log "host checks"
+  if [[ -r /dev/kvm && -w /dev/kvm ]] || [[ -e /dev/kvm && $EUID -eq 0 ]]; then ok "/dev/kvm accessible"
+  elif [[ -e /dev/kvm ]]; then ok "/dev/kvm present (docker daemon will open it)"
+  else warn "/dev/kvm missing: enable VT-x/AMD-V (and nested virt if this host is a VM)"; bad=1; fi
+  for dev in /dev/net/tun /dev/vhost-net; do
+    [[ -e $dev ]] && ok "$dev present" || { warn "$dev missing (sudo modprobe ${dev##*/}; vhost-net: modprobe vhost_net)"; bad=1; }
+  done
+  if $DOCKER info >/dev/null 2>&1; then ok "docker: $($DOCKER version -f '{{.Server.Version}}')"; else warn "docker daemon not reachable"; bad=1; fi
+  if compose version >/dev/null 2>&1; then ok "$(compose version | head -1)"; else warn "docker compose v2 missing"; bad=1; fi
+  for t in ssh scp iconv base64 timeout; do command -v "$t" >/dev/null || { warn "missing tool: $t"; bad=1; }; done
+  local mem_gb; mem_gb=$(awk '/MemTotal/ {printf "%d", $2/1024/1024}' /proc/meminfo)
+  local need=$(( (DC1_RAM_MB + 4 * SQL_RAM_MB) / 1024 + 2 ))
+  (( mem_gb >= need )) && ok "RAM ${mem_gb} GB (lab needs ~${need} GB)" || { warn "RAM ${mem_gb} GB < ~${need} GB needed"; bad=1; }
+  local cpus; cpus=$(nproc); ok "CPUs: $cpus (lab uses $(( DC1_CPUS + 4 * SQL_CPUS )) vCPUs)"
+  mkdir -p "$LAB_IMAGES_DIR"
+  local free_gb; free_gb=$(df -Pk "$LAB_IMAGES_DIR" | awk 'NR==2 {printf "%d", $4/1024/1024}')
+  (( free_gb >= 120 )) && ok "free disk ${free_gb} GB at $LAB_IMAGES_DIR" || warn "only ${free_gb} GB free at $LAB_IMAGES_DIR (recommend >= 120 GB on NVMe)"
+  [[ -f "$LAB_MEDIA_DIR/$LAB_SQL_ISO" ]] && ok "SQL media: $LAB_SQL_ISO" || warn "SQL ISO not found: $LAB_MEDIA_DIR/$LAB_SQL_ISO (needed for provision)"
+  if [[ -r /sys/kernel/mm/ksm/run ]]; then
+    [[ "$(cat /sys/kernel/mm/ksm/run)" == 1 ]] && ok "KSM enabled" || warn "KSM off. Optional: echo 1 | sudo tee /sys/kernel/mm/ksm/run (dedupes identical Windows pages across VMs)"
+  fi
+  if [[ -r /sys/module/kvm_intel/parameters/nested ]]; then ok "kvm_intel nested=$(cat /sys/module/kvm_intel/parameters/nested)"; fi
+  (( bad == 0 )) && ok "doctor: all required checks passed" || warn "doctor: fix the warnings above"
+  return $bad
+}
+
+# ---------------------------------------------------------------------- init --
+cmd_image() { log "building runtime image $LAB_IMAGE"; $DOCKER build -q -t "$LAB_IMAGE" "$LAB_ROOT/runtime" >/dev/null; ok "image $LAB_IMAGE"; }
+ensure_key() {
+  mkdir -p "$SECRETS_DIR"; chmod 700 "$SECRETS_DIR"
+  [[ -f "$SSH_KEY" ]] || { ssh-keygen -q -t ed25519 -N '' -C sql-ag-lab -f "$SSH_KEY"; ok "generated lab SSH key"; }
+}
+ensure_net() {
+  local n sub gw br mac
+  for n in a b; do
+    sub=$(eval echo "\$LAB_NET_${n^^}"); gw=$(eval echo "\$LAB_NET_${n^^}_HOST")
+    br=$(eval echo "\$LAB_NET_${n^^}_BRIDGE"); mac=$(eval echo "\$LAB_NET_${n^^}_BRIDGE_MAC")
+    if ! $DOCKER network inspect "lab_$n" >/dev/null 2>&1; then
+      # Dynamic allocation range is a tiny block nobody uses: every lab IP is static.
+      local base=${sub%.*}
+      $DOCKER network create --driver bridge --subnet "$sub" --gateway "$gw" --ip-range "$base.224/28" \
+        -o "com.docker.network.bridge.name=$br" -o com.docker.network.bridge.enable_icc=true \
+        -o com.docker.network.driver.mtu=1500 "lab_$n" >/dev/null
+      ok "created network lab_$n ($sub, host $gw on $br)"
+    fi
+    # Pin the host-side bridge MAC: it is cached in every guest's ARP table inside the
+    # saved memory state; Docker re-randomizes it whenever the daemon recreates the bridge.
+    if ip link show "$br" >/dev/null 2>&1; then
+      if [[ "$(cat "/sys/class/net/$br/address")" != "$mac" ]]; then
+        $SUDO ip link set dev "$br" address "$mac" || warn "could not pin MAC on $br (needs root)"
+      fi
+    fi
+  done
+  ensure_fw
+}
+# Some hosts (ufw, a second container engine, FORWARD policy DROP) filter bridged
+# traffic via br_netfilter. Allow everything between lab bridges explicitly, in the
+# DOCKER-USER chain that Docker reserves for user rules. Scoped to the lab bridges only.
+ensure_fw() {
+  [[ "${LAB_FIREWALL_RULES:-1}" == 1 ]] || return 0
+  local ipt br
+  for ipt in iptables iptables-legacy; do
+    command -v "$ipt" >/dev/null 2>&1 || continue
+    $SUDO "$ipt" -S DOCKER-USER >/dev/null 2>&1 || continue
+    for br in "$LAB_NET_A_BRIDGE" "$LAB_NET_B_BRIDGE"; do
+      $SUDO "$ipt" -C DOCKER-USER -i "$br" -j ACCEPT 2>/dev/null || $SUDO "$ipt" -I DOCKER-USER -i "$br" -j ACCEPT
+      $SUDO "$ipt" -C DOCKER-USER -o "$br" -j ACCEPT 2>/dev/null || $SUDO "$ipt" -I DOCKER-USER -o "$br" -j ACCEPT
+    done
+  done 2>/dev/null || warn "could not add DOCKER-USER rules (needs root); inter-VM traffic may be filtered"
+}
+
+cmd_init() {
+  cmd_doctor || warn "continuing despite doctor warnings"
+  cmd_image; ensure_key; ensure_net
+  mkdir -p "$LAB_IMAGES_DIR"/{base,checkpoints,work,run} "$LAB_MEDIA_DIR"
+  ok "init complete"
+}
+
+# ---------------------------------------------------------------- build-base --
+cmd_build_base() {
+  local t0=$SECONDS bdir="$LAB_ROOT/build/base" gen="$LAB_ROOT/build/base/oem/lab/generated"
+  [[ -f "$LAB_IMAGES_DIR/base/disk.qcow2" && "${1:-}" != --force ]] && { ok "base image exists (use --force to rebuild)"; return 0; }
+  ensure_key
+  mkdir -p "$gen" "$LAB_IMAGES_DIR/base-build" "$LAB_IMAGES_DIR/base" "$bdir/shared"
+  rm -f "$bdir"/shared/*.started "$bdir"/shared/*.done
+  local pw=${LAB_PASSWORD//\\/\\\\}; pw=${pw//\"/\\\"}
+  printf '{ "password": "%s", "authorizedKey": "%s" }\n' "$pw" "$(cat "$SSH_KEY.pub")" > "$gen/lab-config.json"
+  local cf=(-f "$bdir/compose.yml" --env-file "$LAB_ENV_FILE")
+  if [[ -n "${LAB_WIN_ISO:-}" ]]; then
+    warn "LAB_WIN_ISO is set: add '- $LAB_MEDIA_DIR/$LAB_WIN_ISO:/custom.iso' to build/base/compose.yml volumes"
+  fi
+  log "stage 1: dockur installs Windows Server 2025 Core, then Prepare-Base -> reboot -> Finalize-Base -> sysprep -> poweroff"
+  log "watch it at http://127.0.0.1:8006 (progress markers appear in build/base/shared/)"
+  $DOCKER compose "${cf[@]}" up -d
+  local last=""
+  while [[ "$($DOCKER inspect -f '{{.State.Running}}' lab-base-build 2>/dev/null)" == true ]]; do
+    local cur; cur=$(cd "$bdir/shared" && ls -t ./*.started ./*.done 2>/dev/null | head -1 || true)
+    [[ "$cur" != "$last" && -n "$cur" ]] && { log "progress: ${cur#./}"; last=$cur; }
+    (( SECONDS - t0 > 4 * 3600 )) && die "base build exceeded 4h; inspect http://127.0.0.1:8006"
+    sleep 20
+  done
+  [[ -f "$bdir/shared/sysprep.started" ]] || warn "no sysprep marker seen (SMB markers are best effort); check build/base/shared/*.txt logs"
+  local src="$LAB_IMAGES_DIR/base-build/data.qcow2"
+  [[ -f "$src" ]] || die "dockur disk not found at $src"
+  log "compacting base image (qemu-img convert drops trimmed/zero clusters)"
+  in_tool qemu-img convert -p -O qcow2 -o cluster_size=65536 /images/base-build/data.qcow2 /images/base/disk.qcow2.tmp
+  in_tool sh -c 'mv /images/base/disk.qcow2.tmp /images/base/disk.qcow2 && chmod 0444 /images/base/disk.qcow2'
+  $DOCKER compose "${cf[@]}" down >/dev/null 2>&1 || true
+  ok "base image ready: $(in_tool qemu-img info /images/base/disk.qcow2 | awk -F': ' '/disk size/ {print $2}') in $(( (SECONDS - t0) / 60 )) min"
+  log "you may delete $LAB_IMAGES_DIR/base-build to reclaim space"
+}
+
+# -------------------------------------------------------------- checkpoints --
+ckpt_dir() { printf '%s/checkpoints/%s' "$LAB_IMAGES_DIR" "$1"; }
+ckpt_exists() { [[ -f "$(ckpt_dir "$1")/meta.env" ]]; }
+
+lab_running() { [[ -n "$($DOCKER ps -q -f name='^lab-sql1$')" ]]; }
+
+cmd_save() {
+  local name=${1:-} force=0 up=0 a vm t0; t0=$(now_ms)
+  [[ -n "$name" && "$name" =~ ^[A-Za-z0-9._-]+$ ]] || die "usage: ./lab save NAME [--force] [--up]"
+  for a in "${@:2}"; do case $a in --force) force=1 ;; --up) up=1 ;; *) die "unknown option $a" ;; esac; done
+  lab_running || die "lab is not running"
+  if ckpt_exists "$name"; then
+    (( force )) || die "checkpoint '$name' exists (use --force)"
+    [[ "$(cat "$STATE_DIR/active_checkpoint" 2>/dev/null)" == "$name" ]] && die "cannot overwrite '$name' while running on top of it; save under a new name"
+  fi
+  local -A active=()
+  for vm in "${VMS[@]}"; do active[$vm]=$($DOCKER exec "$(vm_container "$vm")" cat /run/lab/active_dir); done
+
+  log "save '$name': pausing all VMs at the same instant"
+  for vm in "${VMS[@]}"; do qmp "$vm" stop & done; wait
+  local tmp; tmp="/images/checkpoints/.tmp-$name"
+  in_tool sh -c "rm -rf '$tmp' && mkdir -p $(printf "'$tmp/%s' " "${VMS[@]}")"
+  local caps=(); [[ "${LAB_MAPPED_RAM:-1}" == 1 ]] && caps=(--mapped-ram)
+  _save_one() { qmp "$1" eject cd0 >/dev/null 2>&1 || true; qmp "$1" save "$tmp/$1/state.bin" "${caps[@]}"; }
+  parallel_vms save _save_one "${VMS[@]}" || die "saving VM state failed (VMs left paused; ./lab down to discard)"
+  for vm in "${VMS[@]}"; do qmp "$vm" quit >/dev/null 2>&1 & done; wait
+  # Wait for QEMU to exit (closes + flushes the qcow2 files) before moving them.
+  for vm in "${VMS[@]}"; do $DOCKER wait "$(vm_container "$vm")" >/dev/null 2>&1 || true; done
+  local mv_cmds="set -e;"
+  for vm in "${VMS[@]}"; do
+    mv_cmds+=" mv '${active[$vm]}/disk.qcow2' '$tmp/$vm/disk.qcow2'; mv '${active[$vm]}/vars.qcow2' '$tmp/$vm/vars.qcow2';"
+  done
+  local parent; parent=$(cat "$STATE_DIR/active_checkpoint" 2>/dev/null || echo base)
+  mv_cmds+=" printf 'NAME=%s\nPARENT=%s\nCREATED=%s\nFINGERPRINT=%s\n' '$name' '$parent' '$(date -u +%FT%TZ)' '$(vm_fingerprint)' > '$tmp/meta.env';"
+  mv_cmds+=" chmod -R a-w '$tmp'/*/disk.qcow2 '$tmp'/*/vars.qcow2 '$tmp'/*/state.bin;"
+  mv_cmds+=" if [ -d '/images/checkpoints/$name' ]; then chmod -R u+w '/images/checkpoints/$name'; rm -rf '/images/checkpoints/$name'; fi;"
+  mv_cmds+=" mv '$tmp' '/images/checkpoints/$name'"
+  in_tool sh -c "$mv_cmds"
+  compose down -t 0 --remove-orphans >/dev/null 2>&1 || true
+  rm -f "$STATE_DIR/active_checkpoint"
+  ok "checkpoint '$name' saved in $(elapsed "$t0") (parent: $parent)"
+  (( up )) && cmd_up "$name"
+  return 0
+}
+
+cmd_list() {
+  local d
+  printf '%-18s %-16s %-22s %s\n' NAME PARENT CREATED SIZE
+  for d in "$LAB_IMAGES_DIR"/checkpoints/*/; do
+    [[ -f "$d/meta.env" ]] || continue
+    local NAME="" PARENT="" CREATED=""
+    # shellcheck disable=SC1091
+    source "$d/meta.env"
+    printf '%-18s %-16s %-22s %s\n' "$NAME" "$PARENT" "$CREATED" "$(du -sh "$d" 2>/dev/null | cut -f1)"
+  done
+}
+
+cmd_delete() {
+  local name=${1:?usage: ./lab delete NAME} d
+  ckpt_exists "$name" || die "no checkpoint '$name'"
+  for d in "$LAB_IMAGES_DIR"/checkpoints/*/meta.env; do
+    grep -qx "PARENT=$name" "$d" && die "checkpoint $(dirname "$d" | xargs basename) depends on '$name'"
+  done
+  [[ "$(cat "$STATE_DIR/active_checkpoint" 2>/dev/null)" == "$name" ]] && lab_running && die "lab is running on '$name'"
+  in_tool sh -c "chmod -R u+w '/images/checkpoints/$name' && rm -rf '/images/checkpoints/$name'"
+  ok "deleted '$name'"
+}
+
+# ------------------------------------------------------------------ up/down --
+cmd_down() {
+  local t0; t0=$(now_ms)
+  compose --progress quiet down -t 0 --remove-orphans >/dev/null 2>&1 || true
+  rm -f "$STATE_DIR/active_checkpoint"
+  ok "lab down in $(elapsed "$t0")"
+}
+
+cmd_up() {
+  local name=${1:-golden} t0; t0=$(now_ms)
+  ckpt_exists "$name" || die "no checkpoint '$name' (./lab list)"
+  local FINGERPRINT=""
+  # shellcheck disable=SC1090,SC1091
+  source "$(ckpt_dir "$name")/meta.env"
+  [[ "$FINGERPRINT" == "$(vm_fingerprint)" ]] || \
+    warn "VM config/runtime image changed since '$name' was saved; restore will likely fail (re-provision or restore the old settings)"
+  ensure_net
+  lab_running && compose --progress quiet down -t 0 --remove-orphans >/dev/null 2>&1
+  LAB_MODE=restore LAB_CHECKPOINT=$name compose --progress quiet up -d --force-recreate >/dev/null
+  echo "$name" > "$STATE_DIR/active_checkpoint"
+  wait_loaded_and_resume "$name" "$t0"
+}
+
+# Every VM loads its RAM image paused; resume all of them together so that, from the
+# guests' point of view, no time passed and no cluster heartbeat was missed.
+wait_loaded_and_resume() { # <name> <t0_ms>
+  local name=$1 t0=$2 vm
+  local deadline=$(( SECONDS + ${LAB_UP_TIMEOUT:-180} ))
+  for vm in "${VMS[@]}"; do
+    until $DOCKER exec "$(vm_container "$vm")" test -f /run/lab/loaded 2>/dev/null; do
+      [[ "$($DOCKER inspect -f '{{.State.Running}}' "$(vm_container "$vm")" 2>/dev/null)" == true ]] \
+        || { $DOCKER logs --tail 30 "$(vm_container "$vm")" >&2; die "$vm failed to restore"; }
+      (( SECONDS > deadline )) && die "$vm: state load timed out"
+      sleep 0.2
+    done
+  done
+  local t_loaded; t_loaded=$(elapsed "$t0")
+  for vm in "${VMS[@]}"; do qmp "$vm" cont & done; wait
+  if [[ "${LAB_TIME_MODE:-frozen}" == sync ]]; then
+    local utc; utc=$(date -u +%Y-%m-%dT%H:%M:%S.%3NZ)
+    _settime() { grun "$1" Set-LabTime.ps1 "$utc" >/dev/null; }
+    parallel_vms settime _settime "${VMS[@]}" || warn "time sync failed on some VMs"
+  fi
+  ok "'$name' restored (state loaded $t_loaded, resumed $(elapsed "$t0"))"
+  if [[ "${LAB_UP_HEALTH:-1}" == 1 ]]; then cmd_health --wait 60; fi
+  ok "lab up in $(elapsed "$t0")"
+}
+
+# Fast path: containers stay, QEMU is killed and respawned in place on a fresh overlay.
+cmd_reset() {
+  local name=${1:-golden} vm
+  if [[ "${LAB_FAST_RESET:-1}" == 1 ]] && lab_running && ckpt_exists "$name" \
+     && [[ "$($DOCKER exec lab-sql1 cat /run/lab/mode 2>/dev/null)" == restore ]]; then
+    local t0; t0=$(now_ms)
+    for vm in "${VMS[@]}"; do
+      $DOCKER exec "$(vm_container "$vm")" sh -c "echo '$name' > /run/lab/respawn && rm -f /run/lab/loaded && kill -9 \$(cat /run/lab/qemu.pid)" &
+    done; wait
+    echo "$name" > "$STATE_DIR/active_checkpoint"
+    wait_loaded_and_resume "$name" "$t0"
+    return
+  fi
+  cmd_down >/dev/null; cmd_up "$name"
+}
+
+# ------------------------------------------------------------------- health --
+cmd_health() {
+  local deep=0 wait=0 a
+  while (( $# )); do case $1 in --deep) deep=1 ;; --wait) wait=$2; shift ;; *) die "unknown option $1" ;; esac; shift; done
+  local t0; t0=$(now_ms)
+  local deadline=$(( SECONDS + wait )) fails
+  while :; do
+    fails=()
+    tcp_ok "$DC1_IP" 389 || fails+=("DC1:389")
+    for a in "${SQL_VMS[@]}"; do tcp_ok "$(vm_ip "$a")" 1433 || fails+=("$a:1433"); done
+    if ! tcp_ok "$LAB_LISTENER_IP_A" "$LAB_LISTENER_PORT" && ! tcp_ok "$LAB_LISTENER_IP_B" "$LAB_LISTENER_PORT"; then
+      [[ "$(cat "$STATE_DIR/active_checkpoint" 2>/dev/null)" =~ ^(sql-standalone|cluster)$ ]] || fails+=("listener")
+    fi
+    (( ${#fails[@]} == 0 )) && break
+    (( SECONDS >= deadline )) && break
+    sleep 0.5
+  done
+  if (( ${#fails[@]} )); then warn "unreachable: ${fails[*]}"; return 1; fi
+  ok "TCP: DC1 ldap, SQL1-4 :1433, listener :$LAB_LISTENER_PORT reachable ($(elapsed "$t0"))"
+  if (( deep )); then
+    gpush SQL1 >/dev/null 2>&1 || true
+    grun SQL1 Test-Lab.ps1 -WaitSeconds "$(( wait > 0 ? wait : 60 ))" || return 1
+  fi
+}
+
+# -------------------------------------------------------------------- misc --
+cmd_status() {
+  compose ps --format 'table {{.Name}}\t{{.State}}\t{{.Status}}' 2>/dev/null || true
+  local vm
+  for vm in "${VMS[@]}"; do
+    printf '  %-5s %-16s %s\n' "$vm" "$(vm_ip "$vm")" "$(qmp "$vm" status 2>/dev/null || echo 'not running')"
+  done
+  [[ -f "$STATE_DIR/active_checkpoint" ]] && echo "  checkpoint: $(cat "$STATE_DIR/active_checkpoint")"
+}
+cmd_ssh() {
+  local vm=${1:?usage: ./lab ssh VM [command]}; vm=${vm^^}
+  if (( $# > 1 )); then gps "$vm" "${*:2}"; else ssh -t "${SSH_OPTS[@]}" "Administrator@$(vm_ip "$vm")"; fi
+}
+cmd_console() {
+  local vm=${1:?usage: ./lab console VM}; vm=${vm^^}
+  local v="${vm}_VNC_PORT"; [[ -n "${!v:-}" ]] || die "unknown VM $vm"
+  echo "vnc://${LAB_VNC_BIND}:${!v}   (e.g. vncviewer ${LAB_VNC_BIND}:${!v}; tunnel with ssh -L if remote)"
+}
+cmd_info() {
+  cat <<INFO
+Domain        $LAB_DOMAIN ($LAB_NETBIOS)      admin: $LAB_NETBIOS\\Administrator / $LAB_PASSWORD
+SQL auth      sa / $LAB_PASSWORD
+Subnet A      $LAB_NET_A  host $LAB_NET_A_HOST  router $LAB_NET_A_ROUTER
+Subnet B      $LAB_NET_B  host $LAB_NET_B_HOST  router $LAB_NET_B_ROUTER
+DC1           $DC1_IP   (DNS for $LAB_DOMAIN)
+SQL1..SQL4    $SQL1_IP  $SQL2_IP  $SQL3_IP  $SQL4_IP   (port 1433)
+Cluster       $LAB_CLUSTER_NAME  $LAB_CLUSTER_IP_A / $LAB_CLUSTER_IP_B
+Listener      $LAB_LISTENER_NAME.$LAB_DOMAIN  $LAB_LISTENER_IP_A / $LAB_LISTENER_IP_B  port $LAB_LISTENER_PORT
+              sqlcmd -S tcp:$LAB_LISTENER_IP_A,$LAB_LISTENER_PORT -U sa -P '$LAB_PASSWORD' -C
+              connection string: Server=tcp:$LAB_LISTENER_NAME.$LAB_DOMAIN,$LAB_LISTENER_PORT;MultiSubnetFailover=True;...
+Host DNS      resolvectl dns $LAB_NET_A_BRIDGE $DC1_IP && resolvectl domain $LAB_NET_A_BRIDGE '~$LAB_DOMAIN'
+INFO
+}
+
+cmd_build() { cmd_init; cmd_build_base "$@"; cmd_provision; }
+
+main() {
+  local cmd=${1:-help}; shift || true
+  case $cmd in
+    help|-h|--help) usage; return 0 ;;
+  esac
+  load_env
+  case $cmd in
+    doctor) cmd_doctor ;;
+    init) cmd_init ;;
+    image) cmd_image ;;
+    net) ensure_net; ok "networks ok" ;;
+    _compose) compose "$@" ;;   # internal/debug: raw docker compose with lab files+env
+    build-base) cmd_build_base "$@" ;;
+    provision) cmd_provision "$@" ;;
+    build) cmd_build "$@" ;;
+    up) cmd_up "$@" ;;
+    down) cmd_down ;;
+    reset) cmd_reset "$@" ;;
+    resume) local v; for v in "${VMS[@]}"; do qmp "$v" cont & done; wait; ok "resumed" ;;
+    save) cmd_save "$@" ;;
+    list) cmd_list ;;
+    delete) cmd_delete "$@" ;;
+    health) cmd_health "$@" ;;
+    status) cmd_status ;;
+    ssh) cmd_ssh "$@" ;;
+    console) cmd_console "$@" ;;
+    info) cmd_info ;;
+    *) usage; die "unknown command: $cmd" ;;
+  esac
+}
+main "$@"
