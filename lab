@@ -38,23 +38,41 @@ Utilities:
   status                 containers + VM run states
   ssh VM [cmd]           PowerShell on a VM (DC1 SQL1 SQL2 SQL3 SQL4)
   console [VM|stop]      start noVNC gateway; print browser console URLs
-  vnc [build|close|urls] open Chromium on Hyprland workspace $LAB_VNC_WORKSPACE (6): one tab per VM
-                         (build = dockur install console :8006)
+  vnc [build|urls]       open noVNC consoles in the default browser (build = dockur :8006)
   info                   connection details (IPs, listener, credentials)
   net                    (re)create lab networks / pin bridge MACs (idempotent)
 USAGE
 }
 
 # ------------------------------------------------------------------- doctor --
+# Package-manager hint for a missing host tool (Ubuntu/Debian first; others best effort).
+pkg_hint() { # <tool>
+  local pkg=$1 id=""; [[ -r /etc/os-release ]] && id=$(. /etc/os-release; echo "${ID} ${ID_LIKE:-}")
+  case $1 in ssh|scp) pkg=openssh-client ;; iconv) pkg=libc-bin ;; base64|timeout|sha256sum) pkg=coreutils ;;
+             ip) pkg=iproute2 ;; xdg-open) pkg=xdg-utils ;; kvm-ok) pkg=cpu-checker ;; esac
+  case " $id " in
+    *" ubuntu "*|*" debian "*) echo "sudo apt install $pkg" ;;
+    *" fedora "*|*" rhel "*)    echo "sudo dnf install $pkg" ;;
+    *" arch "*)                 echo "sudo pacman -S $pkg" ;;
+    *)                          echo "install package '$pkg'" ;;
+  esac
+}
 cmd_doctor() {
   local bad=0
   log "host checks"
   if [[ -r /dev/kvm && -w /dev/kvm ]] || [[ -e /dev/kvm && $EUID -eq 0 ]]; then ok "/dev/kvm accessible"
-  elif [[ -e /dev/kvm ]]; then ok "/dev/kvm present (docker daemon will open it)"
-  else warn "/dev/kvm missing: enable VT-x/AMD-V (and nested virt if this host is a VM)"; bad=1; fi
-  for dev in /dev/net/tun /dev/vhost-net; do
-    [[ -e $dev ]] && ok "$dev present" || { warn "$dev missing (sudo modprobe ${dev##*/}; vhost-net: modprobe vhost_net)"; bad=1; }
-  done
+  elif [[ -e /dev/kvm ]]; then ok "/dev/kvm present (the docker daemon opens it; optional: sudo usermod -aG kvm \$USER)"
+  else
+    warn "/dev/kvm missing: enable VT-x/AMD-V in firmware (and nested virt if this host is a VM)"
+    command -v kvm-ok >/dev/null && warn "  kvm-ok says: $(kvm-ok 2>&1 | tail -1)" || warn "  diagnose with: $(pkg_hint kvm-ok) && kvm-ok"
+    bad=1
+  fi
+  [[ -e /dev/net/tun ]] && ok "/dev/net/tun present" || { warn "/dev/net/tun missing: sudo modprobe tun"; bad=1; }
+  [[ -e /dev/vhost-net ]] && ok "/dev/vhost-net present (faster VM networking)" \
+    || warn "/dev/vhost-net missing (optional, faster networking): sudo modprobe vhost_net"
+  if [[ "$($DOCKER info -f '{{.OperatingSystem}}' 2>/dev/null)" == *snap* ]] || [[ "$(command -v docker)" == /snap/* ]]; then
+    warn "docker is the snap package: its confinement can block /dev/kvm, tap devices and bind mounts; use docker.io or Docker CE"
+  fi
   if $DOCKER info >/dev/null 2>&1; then ok "docker: $($DOCKER version -f '{{.Server.Version}}')"; else
     warn "docker daemon not reachable"; bad=1
     if id -nG "$USER" 2>/dev/null | grep -qw docker || getent group docker | grep -qw "$USER"; then
@@ -62,10 +80,17 @@ cmd_doctor() {
         warn "you are in group 'docker' but this session is not: log out and in, or run commands via"
         warn "  printf '%s\n' 'cd $LAB_ROOT && ./lab doctor' | newgrp docker"
       fi
-    else warn "add yourself to group docker: sudo usermod -aG docker \$USER (then log out and in)"; fi
+    elif command -v docker >/dev/null; then warn "add yourself to group docker: sudo usermod -aG docker \$USER (then log out and in)"
+    else warn "docker missing: sudo apt install docker.io docker-compose-v2 (Ubuntu), or install Docker CE"; fi
   fi
-  if compose version >/dev/null 2>&1; then ok "$(compose version | head -1)"; else warn "docker compose v2 missing"; bad=1; fi
-  for t in ssh scp iconv base64 timeout; do command -v "$t" >/dev/null || { warn "missing tool: $t"; bad=1; }; done
+  if compose version >/dev/null 2>&1; then ok "$(compose version | head -1)"; else
+    warn "docker compose v2 missing: sudo apt install docker-compose-v2 (Ubuntu docker.io) or docker-compose-plugin (Docker CE)"; bad=1; fi
+  for t in ssh scp iconv base64 timeout sha256sum ip curl; do
+    command -v "$t" >/dev/null || { warn "missing tool: $t ($(pkg_hint "$t"))"; bad=1; }; done
+  command -v xdg-open >/dev/null || warn "xdg-open missing (optional, for ./lab vnc): $(pkg_hint xdg-open)"
+  if command -v aa-status >/dev/null && [[ -d /sys/kernel/security/apparmor ]]; then
+    ok "AppArmor active (Docker's default profile allows the lab's /dev/kvm, tun and NET_ADMIN use)"
+  fi
   local mem_gb; mem_gb=$(awk '/MemTotal/ {printf "%d", $2/1024/1024}' /proc/meminfo)
   local need=$(( (DC1_RAM_MB + 4 * SQL_RAM_MB) / 1024 + 2 ))
   (( mem_gb >= need )) && ok "RAM ${mem_gb} GB (lab needs ~${need} GB)" || { warn "RAM ${mem_gb} GB < ~${need} GB needed"; bad=1; }
@@ -77,7 +102,8 @@ cmd_doctor() {
   if [[ -r /sys/kernel/mm/ksm/run ]]; then
     [[ "$(cat /sys/kernel/mm/ksm/run)" == 1 ]] && ok "KSM enabled" || warn "KSM off. Optional: echo 1 | sudo tee /sys/kernel/mm/ksm/run (dedupes identical Windows pages across VMs)"
   fi
-  if [[ -r /sys/module/kvm_intel/parameters/nested ]]; then ok "kvm_intel nested=$(cat /sys/module/kvm_intel/parameters/nested)"; fi
+  local m; for m in kvm_intel kvm_amd; do
+    [[ -r /sys/module/$m/parameters/nested ]] && ok "$m nested=$(cat /sys/module/$m/parameters/nested)"; done
   (( bad == 0 )) && ok "doctor: all required checks passed" || warn "doctor: fix the warnings above"
   return $bad
 }
@@ -365,71 +391,26 @@ cmd_console() {
   done
 }
 # ------------------------------------------------------------------ browser consoles --
-# Find the user's Hyprland session from any shell (ssh, agent, cron): runtime dir,
-# instance signature (newest under $XDG_RUNTIME_DIR/hypr) and Wayland socket.
-hypr_env() {
-  export XDG_RUNTIME_DIR=${XDG_RUNTIME_DIR:-/run/user/$(id -u)}
-  command -v hyprctl >/dev/null || return 1
-  if [[ -z "${HYPRLAND_INSTANCE_SIGNATURE:-}" ]] || ! hyprctl -j version >/dev/null 2>&1; then
-    HYPRLAND_INSTANCE_SIGNATURE=$(command ls -1t "$XDG_RUNTIME_DIR/hypr" 2>/dev/null | head -1)
-    export HYPRLAND_INSTANCE_SIGNATURE
-  fi
-  if [[ -z "${WAYLAND_DISPLAY:-}" ]]; then
-    WAYLAND_DISPLAY=$(cd "$XDG_RUNTIME_DIR" && command ls -1 wayland-? 2>/dev/null | head -1); export WAYLAND_DISPLAY
-  fi
-  hyprctl -j version >/dev/null 2>&1
-}
-# Hyprland accepts classic dispatchers (hyprland.conf) or Lua ones (hyprland.lua). Try both.
-hypr_move() { # <address> <workspace>
-  hyprctl dispatch movetoworkspacesilent "$2,address:$1" 2>/dev/null | grep -qx ok && return 0
-  hyprctl dispatch "hl.dsp.window.move({ workspace = $2, window = 'address:$1', silent = true })" 2>/dev/null | grep -qx ok
-}
-hypr_close() { # <address>
-  hyprctl dispatch closewindow "address:$1" 2>/dev/null | grep -qx ok && return 0
-  hyprctl dispatch "hl.dsp.window.close({ window = 'address:$1' })" 2>/dev/null | grep -qx ok
-}
-hypr_addrs() { # [title regex]  -> window addresses (all, or those whose title matches)
-  hyprctl -j clients | python3 -c "import json,re,sys;p=sys.argv[1]
-[print(c['address']) for c in json.load(sys.stdin) if not p or re.search(p,c['title'])]" "${1:-}"
-}
-browser_bin() {
-  local b; for b in ${LAB_BROWSER:-} chromium chromium-browser google-chrome-stable google-chrome; do
-    command -v "$b" >/dev/null && { echo "$b"; return; }; done; return 1
-}
-open_on_workspace() { # <url>...   one window, one tab per URL, on $LAB_VNC_WORKSPACE
-  local ws=${LAB_VNC_WORKSPACE:-6} br before a new=""
-  br=$(browser_bin) || { warn "no Chromium/Chrome found; open these URLs by hand:"; printf '  %s\n' "$@"; return 1; }
-  if ! hypr_env; then
-    warn "Hyprland session not found; opening without workspace placement"
-    (setsid "$br" --new-window "$@" >/dev/null 2>&1 &); return 0
-  fi
-  before=" $(hypr_addrs | tr '\n' ' ') "
-  (setsid "$br" --new-window "$@" >/dev/null 2>&1 < /dev/null &)
-  for _ in $(seq 1 40); do
-    for a in $(hypr_addrs); do [[ "$before" == *" $a "* ]] || { new=$a; break; }; done
-    [[ -n "$new" ]] && break; sleep 0.25
-  done
-  [[ -n "$new" ]] || { warn "browser window did not appear in Hyprland"; return 1; }
-  hypr_move "$new" "$ws" && ok "browser window $new on workspace $ws ($# tabs)" || warn "could not move $new to workspace $ws"
-}
 cmd_vnc() {
-  # ./lab vnc          open one noVNC tab per VM (DC1 SQL1-4) on workspace $LAB_VNC_WORKSPACE (6)
-  # ./lab vnc build    open the dockur base-build console (http://127.0.0.1:8006)
-  # ./lab vnc close    close lab console windows
-  # ./lab vnc urls     print the URLs only
-  local mode=${1:-vms} a urls=() vm v
-  if hypr_env; then for a in $(hypr_addrs 'noVNC|127\.0\.0\.1:(8006|61[0-9][0-9])'); do hypr_close "$a"; done; fi
+  # ./lab vnc         open one noVNC tab per VM (DC1 SQL1-4) in the default browser
+  # ./lab vnc build   open the dockur base-build console (http://127.0.0.1:8006)
+  # ./lab vnc urls    print the URLs only
+  local mode=${1:-vms} urls=() vm v u
   case $mode in
-    close) ok "lab console windows closed"; return ;;
     build) urls=("http://127.0.0.1:8006") ;;
     vms|urls)
       cmd_console >/dev/null
       for vm in DC1 SQL1 SQL2 SQL3 SQL4; do v="${vm}_VNC_PORT"
         urls+=("http://${LAB_VNC_BIND}:${!v}/vnc.html?autoconnect=1&resize=scale&reconnect=1&reconnect_delay=2000"); done ;;
-    *) die "usage: ./lab vnc [build|close|urls]" ;;
+    *) die "usage: ./lab vnc [build|urls]" ;;
   esac
-  [[ $mode == urls ]] && { printf '%s\n' "${urls[@]}"; return; }
-  open_on_workspace "${urls[@]}"
+  if [[ $mode != urls ]] && command -v xdg-open >/dev/null && [[ -n "${DISPLAY:-}${WAYLAND_DISPLAY:-}" ]]; then
+    for u in "${urls[@]}"; do xdg-open "$u" >/dev/null 2>&1 & sleep 0.5; done
+    ok "opened ${#urls[@]} console tab(s) in the default browser"
+  else
+    [[ $mode == urls ]] || log "no graphical session found; open these URLs in a browser on this host:"
+    printf '  %s\n' "${urls[@]}"
+  fi
 }
 cmd_info() {
   cat <<INFO
