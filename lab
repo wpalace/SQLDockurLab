@@ -45,17 +45,11 @@ USAGE
 }
 
 # ------------------------------------------------------------------- doctor --
-# Package-manager hint for a missing host tool (Ubuntu/Debian first; others best effort).
+# Hint for a missing host tool: name the tool and what provides it, no package manager.
 pkg_hint() { # <tool>
-  local pkg=$1 id=""; [[ -r /etc/os-release ]] && id=$(. /etc/os-release; echo "${ID} ${ID_LIKE:-}")
-  case $1 in ssh|scp) pkg=openssh-client ;; iconv) pkg=libc-bin ;; base64|timeout|sha256sum) pkg=coreutils ;;
-             ip) pkg=iproute2 ;; xdg-open) pkg=xdg-utils ;; kvm-ok) pkg=cpu-checker ;; esac
-  case " $id " in
-    *" ubuntu "*|*" debian "*) echo "sudo apt install $pkg" ;;
-    *" fedora "*|*" rhel "*)    echo "sudo dnf install $pkg" ;;
-    *" arch "*)                 echo "sudo pacman -S $pkg" ;;
-    *)                          echo "install package '$pkg'" ;;
-  esac
+  case $1 in ssh|scp) echo "install an OpenSSH client" ;; iconv) echo "part of the C library tools (glibc/libc-bin)" ;;
+             base64|timeout|sha256sum) echo "part of GNU coreutils" ;; ip) echo "install iproute2" ;;
+             xdg-open) echo "install xdg-utils" ;; curl) echo "install curl" ;; *) echo "install $1" ;; esac
 }
 cmd_doctor() {
   local bad=0
@@ -64,14 +58,15 @@ cmd_doctor() {
   elif [[ -e /dev/kvm ]]; then ok "/dev/kvm present (the docker daemon opens it; optional: sudo usermod -aG kvm \$USER)"
   else
     warn "/dev/kvm missing: enable VT-x/AMD-V in firmware (and nested virt if this host is a VM)"
-    command -v kvm-ok >/dev/null && warn "  kvm-ok says: $(kvm-ok 2>&1 | tail -1)" || warn "  diagnose with: $(pkg_hint kvm-ok) && kvm-ok"
+    grep -Eqc '(vmx|svm)' /proc/cpuinfo && warn "  the CPU has VT-x/AMD-V: load the module (sudo modprobe kvm_intel or kvm_amd)" \
+      || warn "  the CPU flags show no vmx/svm: enable virtualization in the firmware"
     bad=1
   fi
   [[ -e /dev/net/tun ]] && ok "/dev/net/tun present" || { warn "/dev/net/tun missing: sudo modprobe tun"; bad=1; }
   [[ -e /dev/vhost-net ]] && ok "/dev/vhost-net present (faster VM networking)" \
     || warn "/dev/vhost-net missing (optional, faster networking): sudo modprobe vhost_net"
   if [[ "$($DOCKER info -f '{{.OperatingSystem}}' 2>/dev/null)" == *snap* ]] || [[ "$(command -v docker)" == /snap/* ]]; then
-    warn "docker is the snap package: its confinement can block /dev/kvm, tap devices and bind mounts; use docker.io or Docker CE"
+    warn "docker runs as a snap: its confinement can block /dev/kvm, tap devices and bind mounts; use a native Docker Engine"
   fi
   if $DOCKER info >/dev/null 2>&1; then ok "docker: $($DOCKER version -f '{{.Server.Version}}')"; else
     warn "docker daemon not reachable"; bad=1
@@ -81,10 +76,10 @@ cmd_doctor() {
         warn "  printf '%s\n' 'cd $LAB_ROOT && ./lab doctor' | newgrp docker"
       fi
     elif command -v docker >/dev/null; then warn "add yourself to group docker: sudo usermod -aG docker \$USER (then log out and in)"
-    else warn "docker missing: sudo apt install docker.io docker-compose-v2 (Ubuntu), or install Docker CE"; fi
+    else warn "docker missing: install Docker Engine (https://docs.docker.com/engine/install/)"; fi
   fi
   if compose version >/dev/null 2>&1; then ok "$(compose version | head -1)"; else
-    warn "docker compose v2 missing: sudo apt install docker-compose-v2 (Ubuntu docker.io) or docker-compose-plugin (Docker CE)"; bad=1; fi
+    warn "docker compose v2 missing: install the Docker Compose v2 plugin ('docker compose version' must work)"; bad=1; fi
   for t in ssh scp iconv base64 timeout sha256sum ip curl; do
     command -v "$t" >/dev/null || { warn "missing tool: $t ($(pkg_hint "$t"))"; bad=1; }; done
   command -v xdg-open >/dev/null || warn "xdg-open missing (optional, for ./lab vnc): $(pkg_hint xdg-open)"

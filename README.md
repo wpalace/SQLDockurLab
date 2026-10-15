@@ -13,22 +13,22 @@ host (Linux, KVM, Docker)
           router container routes between subnets (optional netem WAN delay)
 ```
 
-## Host prerequisites (Ubuntu 22.04 / 24.04)
+## Host prerequisites
 
-> Ubuntu is the expected host, but this lab has not yet been tested on Ubuntu hardware. It was
-> developed on Arch Linux (Docker 29, KVM) and on a Debian-based CI-style box (TCG).
+| Requirement | Check |
+|---|---|
+| Linux, x86-64, CPU virtualization enabled | `grep -Ec '(vmx|svm)' /proc/cpuinfo` > 0 and `/dev/kvm` exists |
+| Docker Engine (native, not a snap) | `docker info` |
+| Docker Compose v2 | `docker compose version` |
+| User in groups `docker` and `kvm` | `id -nG` lists both (log out and in after adding) |
+| `tun` (required), `vhost_net` (optional) | `/dev/net/tun`, `/dev/vhost-net` exist (`sudo modprobe tun vhost_net`) |
+| OpenSSH client, curl, coreutils (`sha256sum`, `base64`, `timeout`), iconv, iproute2 | `./lab doctor` |
+| xdg-open (optional, for `./lab vnc`) | `command -v xdg-open` |
+| 32 GB RAM, 120 GB free disk (NVMe) | `./lab doctor` |
 
-```bash
-sudo apt update
-sudo apt install docker.io docker-compose-v2 openssh-client curl coreutils iproute2 cpu-checker xdg-utils
-# or Docker CE from download.docker.com: docker-ce docker-ce-cli containerd.io docker-compose-plugin
-kvm-ok                                   # must say "KVM acceleration can be used"
-sudo usermod -aG docker,kvm "$USER"      # then log out and log in
-sudo modprobe tun vhost_net
-```
-
-Do not use the Docker snap package (confinement blocks `/dev/kvm`, tap devices and bind mounts).
-No QEMU is needed on the host; it runs inside the lab containers.
+QEMU is not needed on the host; it runs inside the lab containers. `./lab doctor` checks all of
+the above. Tested hosts so far: one Linux workstation with Docker 29 and KVM, and one CI-style box
+with TCG emulation; other distributions are expected to work but are untested.
 
 ## Quickstart
 
@@ -192,9 +192,8 @@ guests** (the build sandbox cannot run KVM guests).
 - SQL 2025 setup flags (`/SQLMAXMEMORY`, PID `22222-...` for Enterprise Developer) come from the
   docs. Enable-Hadr uses `Enable-SqlAlwaysOn` (SQLPS); the registry fallback also grants the
   service SID cluster access and registers the AG resource type (else error 35222 / 41105).
-- Ubuntu (expected host, untested on hardware): iptables there is the nft shim, which `./lab net`
-  handles; ufw does not affect host→VM traffic (the host sits on the lab bridges) or cross-subnet
-  traffic (routed inside the router container). AppArmor's docker-default profile allows the
+- Firewalls: hosts with the iptables nft shim work with `./lab net`; ufw/firewalld do not affect host→VM traffic (the host sits on the lab bridges) or cross-subnet
+  traffic (routed inside the router container). Default AppArmor/SELinux container profiles allow the
   `/dev/kvm`/`/dev/net/tun` devices and `NET_ADMIN` that the containers use. Avoid snap Docker.
 - Docker ≥ 28 changed bridge filtering. Host→VM traffic doesn't depend on it, but verify
   cross-subnet with the e2e test. Rootful podman is untested.
