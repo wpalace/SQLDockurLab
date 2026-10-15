@@ -16,7 +16,8 @@ do {
         $nodes | Where-Object { $_.state -ne 'Up' } | ForEach-Object { $problems.Add("cluster node $($_.name) is $($_.state)") }
     } catch { $problems.Add("cluster query failed: $($_.Exception.Message)") }
     try {
-        $rows = Invoke-LabSql -Query @"
+        # Query the primary (via the listener): a secondary only sees its own replica state.
+        $rows = Invoke-LabSql -Server "tcp:$($c.listenerName).$($c.domain),$($c.listenerPort)" -MultiSubnetFailover -Query @"
 SELECT ar.replica_server_name AS replica, ars.role_desc AS role, ars.connected_state_desc AS connected,
        ars.synchronization_health_desc AS health, ar.availability_mode_desc AS mode,
        ISNULL(drs.synchronization_state_desc, N'') AS dbstate

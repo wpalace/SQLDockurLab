@@ -37,7 +37,7 @@ Fast path (CI):
 Utilities:
   status                 containers + VM run states
   ssh VM [cmd]           PowerShell on a VM (DC1 SQL1 SQL2 SQL3 SQL4)
-  console VM             print the VNC address of a VM's console
+  console [VM|stop]      start noVNC gateway; print browser console URLs
   info                   connection details (IPs, listener, credentials)
   net                    (re)create lab networks / pin bridge MACs (idempotent)
 USAGE
@@ -144,6 +144,10 @@ cmd_build_base() {
   while [[ "$($DOCKER inspect -f '{{.State.Running}}' lab-base-build 2>/dev/null)" == true ]]; do
     local cur; cur=$(cd "$bdir/shared" && ls -t ./*.started ./*.done 2>/dev/null | head -1 || true)
     [[ "$cur" != "$last" && -n "$cur" ]] && { log "progress: ${cur#./}"; last=$cur; }
+    if compgen -G "$bdir/shared/*.failed" >/dev/null; then
+      tail -n 40 "$bdir"/shared/*.txt >&2 2>/dev/null || true
+      die "guest reported $(cd "$bdir/shared" && echo ./*.failed); VM left running for inspection (http://127.0.0.1:8006)"
+    fi
     (( SECONDS - t0 > 4 * 3600 )) && die "base build exceeded 4h; inspect http://127.0.0.1:8006"
     sleep 20
   done
@@ -329,9 +333,26 @@ cmd_ssh() {
   if (( $# > 1 )); then gps "$vm" "${*:2}"; else ssh -t "${SSH_OPTS[@]}" "Administrator@$(vm_ip "$vm")"; fi
 }
 cmd_console() {
-  local vm=${1:?usage: ./lab console VM}; vm=${vm^^}
-  local v="${vm}_VNC_PORT"; [[ -n "${!v:-}" ]] || die "unknown VM $vm"
-  echo "vnc://${LAB_VNC_BIND}:${!v}   (e.g. vncviewer ${LAB_VNC_BIND}:${!v}; tunnel with ssh -L if remote)"
+  # ./lab console        -> start the noVNC gateway and print a browser URL per VM
+  # ./lab console VM     -> just that VM's URL;  ./lab console stop -> remove the gateway
+  # QEMU serves VNC on $LAB_IMAGES_DIR/run/<vm>.vnc (unix socket); websockify bridges it.
+  local arg=${1:-}; arg=${arg^^}
+  if [[ $arg == STOP ]]; then $DOCKER rm -f lab-novnc >/dev/null 2>&1; ok "noVNC gateway removed"; return; fi
+  local vms=(DC1 SQL1 SQL2 SQL3 SQL4) vm v script=""
+  [[ -n $arg ]] && vms=("$arg")
+  for vm in DC1 SQL1 SQL2 SQL3 SQL4; do
+    v="${vm}_VNC_PORT"
+    script+="websockify --web /usr/share/novnc ${LAB_VNC_BIND}:${!v} --unix-target=/images/run/${vm,,}.vnc >/dev/null 2>&1 & "
+  done
+  if ! $DOCKER ps --format '{{.Names}}' | grep -qx lab-novnc; then
+    $DOCKER rm -f lab-novnc >/dev/null 2>&1 || true
+    $DOCKER run -d --name lab-novnc --network host --restart unless-stopped -v "$LAB_IMAGES_DIR:/images" \
+      --entrypoint sh "$LAB_IMAGE" -c "${script} wait" >/dev/null || die "could not start noVNC gateway"
+  fi
+  for vm in "${vms[@]}"; do
+    v="${vm}_VNC_PORT"; [[ -n "${!v:-}" ]] || die "unknown VM $vm"
+    printf '  %-5s http://%s:%s/vnc.html?autoconnect=1&resize=scale&reconnect=1\n' "$vm" "$LAB_VNC_BIND" "${!v}"
+  done
 }
 cmd_info() {
   cat <<INFO

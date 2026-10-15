@@ -3,6 +3,7 @@
 $c = Get-LabConfig
 $ag = $c.agName; $db = $c.agDatabase
 Wait-LabSql
+Wait-LabHadrReady
 
 Write-Step "Database $db"
 Invoke-LabSql -NonQuery -Query @"
@@ -19,7 +20,7 @@ IF OBJECT_ID(N'dbo.LabHeartbeat') IS NULL
 INSERT dbo.LabHeartbeat(note) VALUES (N'created by New-LabAg.ps1');
 "@
 # A full backup is required before a database can join an AG.
-Invoke-LabSql -NonQuery -Query "BACKUP DATABASE [$db] TO DISK = N'NUL' WITH COPY_ONLY = OFF, INIT;"
+Invoke-LabSql -NonQuery -Query "BACKUP DATABASE [$db] TO DISK = N'NUL' WITH INIT;"
 
 $exists = (Invoke-LabSql -Query "SELECT COUNT(*) AS n FROM sys.availability_groups WHERE name = N'$ag'").Rows[0].n
 if ($exists -eq 0) {

@@ -6,28 +6,39 @@ Wait-LabSql
 $enabled = (Invoke-LabSql -Query "SELECT CAST(SERVERPROPERTY('IsHadrEnabled') AS int) AS h").Rows[0].h
 if ($enabled -ne 1) {
     Write-Step 'Enabling Always On availability groups'
+    # Enable only once the local cluster node is Up, or the replica manager can hang waiting for WSFC.
+    Wait-Until -What "cluster node $env:COMPUTERNAME Up" -TimeoutSeconds 300 -IntervalSeconds 3 -Condition {
+        (Get-ClusterNode -Name $env:COMPUTERNAME -ErrorAction Stop).State -eq 'Up'
+    }
+    # Preferred: Enable-SqlAlwaysOn (SqlServer or the SQLPS module SQL Setup installs). Besides the
+    # HADR flag it grants the service SID cluster access and registers the AG resource type;
+    # without that CREATE AVAILABILITY GROUP fails with 35222 / 41105. It restarts the service.
     $done = $false
-    # Preferred: SQL Server WMI provider (what Enable-SqlAlwaysOn does under the hood).
-    $ns = Get-CimInstance -Namespace 'root\Microsoft\SqlServer' -ClassName __NAMESPACE -ErrorAction SilentlyContinue |
-        Where-Object Name -like 'ComputerManagement*' | Sort-Object Name -Descending | Select-Object -First 1
-    if ($ns) {
-        $flag = Get-CimInstance -Namespace "root\Microsoft\SqlServer\$($ns.Name)" -ClassName ServerSettingsGeneralFlag `
-            -Filter "FlagName='Hadr' AND InstanceName='MSSQLSERVER'" -ErrorAction SilentlyContinue
-        if ($flag) { $r = Invoke-CimMethod -InputObject $flag -MethodName SetValue -Arguments @{ FlagValue = $true }; $done = ($r.ReturnValue -eq 0) }
+    foreach ($m in 'SqlServer', 'SQLPS') {
+        if ($done -or -not (Get-Module -ListAvailable $m)) { continue }
+        try {
+            Import-Module $m -DisableNameChecking -ErrorAction Stop 3>$null
+            Enable-SqlAlwaysOn -ServerInstance $env:COMPUTERNAME -Force -ErrorAction Stop
+            $done = $true
+        } catch { Write-Warning "Enable-SqlAlwaysOn via $m failed: $($_.Exception.Message)" }
     }
     if (-not $done) {
-        # Fallback: the same registry value the WMI provider writes.
+        # Fallback: the HADR flag in the registry plus the cluster pieces done by hand.
+        Write-Warning 'falling back to registry HADR flag + manual cluster ACL / resource type'
         $key = "HKLM:\SOFTWARE\Microsoft\Microsoft SQL Server\$(Get-SqlInstanceId)\MSSQLServer\HADR"
-        New-Item -Path $key -Force | Out-Null
+        if (-not (Test-Path $key)) { New-Item -Path $key -Force | Out-Null }
         Set-ItemProperty -Path $key -Name HADR_Enabled -Value 1 -Type DWord
+        Grant-LabSqlClusterAccess
+        Register-LabAgResourceType
+        Restart-Service MSSQLSERVER -Force
     }
-    Restart-Service MSSQLSERVER -Force
     Start-Service SQLSERVERAGENT -ErrorAction SilentlyContinue
     Wait-LabSql
     $enabled = (Invoke-LabSql -Query "SELECT CAST(SERVERPROPERTY('IsHadrEnabled') AS int) AS h").Rows[0].h
     if ($enabled -ne 1) { throw 'HADR still disabled after restart (is this node a member of the cluster?)' }
 }
-Write-Ok 'IsHadrEnabled = 1'
+Wait-LabHadrReady
+Write-Ok 'IsHadrEnabled = 1, HADR manager running'
 
 Write-Step 'HADR endpoint'
 Invoke-LabSql -NonQuery -Query @"

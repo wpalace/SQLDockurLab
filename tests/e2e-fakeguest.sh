@@ -26,8 +26,8 @@ fail() { printf '\e[31mFAIL\e[0m %s\n' "$*"; exit 1; }
 uptime_of() { timeout 3 bash -c "exec 3<>/dev/tcp/$1/1433; cat <&3" 2>/dev/null | awk '{print $1}'; }
 uptime_dc() { timeout 3 bash -c "exec 3<>/dev/tcp/$1/389; cat <&3" 2>/dev/null | awk '{print $1}'; }
 
-docker run --rm --entrypoint qemu-img -v "$WORK/images:/images" sql-ag-lab/vm:latest create -q -f qcow2 /images/base/disk.qcow2 1G
 "$LAB" image
+docker run --rm --entrypoint qemu-img -v "$WORK/images:/images" sql-ag-lab/vm:latest create -q -f qcow2 /images/base/disk.qcow2 1G
 "$LAB" down >/dev/null 2>&1 || true
 "$LAB" net
 
