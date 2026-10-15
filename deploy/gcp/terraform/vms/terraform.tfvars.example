@@ -23,3 +23,4 @@ vms = {
 # default_cpu_model        = "host"
 # default_spot             = true               # spot: cheap, may be preempted (VM stops, disk kept)
 # public_ip                = false              # IAP only
+# timezone                 = "UTC"              # e.g. "America/Los_Angeles" for PT log times

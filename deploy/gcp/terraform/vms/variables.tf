@@ -111,3 +111,9 @@ variable "vms" {
     error_message = "A VM uses a machine series without nested virtualization support."
   }
 }
+
+variable "timezone" {
+  description = "Time zone of the lab hosts (log and transcript times), for example America/Los_Angeles."
+  type        = string
+  default     = "UTC"
+}
