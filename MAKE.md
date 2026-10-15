@@ -22,6 +22,19 @@ Read this file completely before you start. Do the procedures in sequence.
 - One WSFC cluster (`LABCLU`), AG `LabAG` with database `LabDB`, listener `LabAGL` at 10.50.0.60 and 10.51.0.60, port 1433.
 - Passwords: see `lab.env` (`LAB_PASSWORD`). Run `./lab info` to show all connection data.
 
+## 1a. Choose the deployment target
+
+1. Ask the user: "Deploy the lab Local or on GCP?"
+2. Record the answer in `TRANSCRIPT.md`.
+3. Do the procedure for that target:
+
+| Target | Host | Procedure |
+|---|---|---|
+| Local | This Linux computer | Sections 3 to 10 |
+| GCP | One Google Compute Engine VM | Section G, then sections 3 to 10 on that VM |
+
+> **NOTE:** More targets can be added to this table. Each target makes a Linux host with KVM and Docker. Then the same lab procedure (sections 3 to 10) runs on that host.
+
 ## 2. Expected durations (32-thread host, NVMe, KVM)
 
 | Step | Duration |
@@ -176,3 +189,97 @@ Do all these tests after provisioning. Record each result in the summary (sectio
 | TC1 | PASS/FAIL | | |
 
 5. Give the user the total time, the test summary, and the remaining problems.
+
+## G. Target: GCP
+
+> **NOTE:** In this section, *workstation* is the computer of the user. *Lab host* is the GCE VM. Run `./lab gcp ...` on the workstation. Run `./lab ...` on the lab host.
+
+> **CAUTION:** The GCP target makes resources that cost money. Get approval from the user before each `apply`, `create`, and `deploy`. Stop the lab host when you finish (G9).
+
+### G1. Workstation prerequisites
+
+1. Make sure that the workstation has the Google Cloud CLI. Run `gcloud version`.
+2. Make sure that the workstation has Terraform 1.5 or later. Run `terraform version`.
+3. Tell the user to sign in: `gcloud auth login` and `gcloud auth application-default login`.
+4. Run `./lab gcp tf-check`. The output must show `Success!` two times.
+
+### G2. Parameters
+
+1. Copy the examples:
+   `cp deploy/gcp/terraform/shared/terraform.tfvars.example deploy/gcp/terraform/shared/terraform.tfvars` and
+   `cp deploy/gcp/terraform/vms/terraform.tfvars.example deploy/gcp/terraform/vms/terraform.tfvars`.
+2. Tell the user to fill in each value marked `REQUIRED`: `project_id`, `bucket_name`, `team_members`, and the `vms` entries (`<owner>-<n>`).
+3. Make sure that the user agrees to the other values: region and zone, machine type, disk size and type, spot, `public_ip`.
+4. Optional: to share Terraform state with the team, copy `backend.tf.example` to `backend.tf` in each root and set the state bucket.
+
+> **NOTE:** Defaults: `n2-standard-16` (16 vCPU, 64 GB), `Intel Ice Lake`, `pd-ssd` 300 GB, Debian 12 image, spot, no public IP. Nested virtualization works on Intel machine series (N1, N2, N4, C2, C3, C4) and on AMD N4D only. It does not work on E2, Arm, other AMD, or memory-optimized series. N4, C3, and C4 need `hyperdisk-balanced`.
+
+> **NOTE:** The `terraform.tfvars` files, `backend.tf`, and the state are not committed (`.gitignore`).
+
+### G3. Shared infrastructure (one time for each project)
+
+1. Run `./lab gcp init shared`.
+2. Run `./lab gcp plan shared`. Show the plan to the user.
+3. Run `./lab gcp apply shared`. This makes the VPC, the subnet, Cloud NAT, the IAP SSH firewall rule, two service accounts (read and publish), and the artifact bucket.
+
+> **NOTE:** If the shared root exists already (another team member applied it), skip G3.
+
+### G4. Lab host VM
+
+1. Run `./lab gcp init vms`.
+2. Run `./lab gcp plan vms`. Show the plan to the user.
+3. Run `./lab gcp apply vms`.
+4. Run `./lab gcp list`. The VM must show `RUNNING` and `NESTED True`.
+5. Wait 5 min. The startup script installs Docker.
+
+### G5. Verify the lab host (do not skip)
+
+1. Run `./lab gcp push VM`. This copies the committed repository to `~/sql-ag-lab` on the lab host.
+2. Run `./lab gcp check VM`.
+3. The output must end with `is ready for the lab`. The check examines:
+   - GCE settings: nested virtualization on, machine type and minimum CPU platform the same as Terraform, no external IP.
+   - The lab host: startup script complete, `vmx`/`svm` CPU flag, `/dev/kvm`, KVM module, `/dev/net/tun`, `/dev/vhost-net`, Docker and Compose, group `docker`, vCPUs, RAM, disk size and free space, disk throughput, bucket access, clock sync, internet egress.
+   - `./lab doctor` on the lab host.
+4. If a line shows `FAIL`, do the `fix:` action on that line. Then do step 2 again.
+
+### G6. Shared artifacts
+
+1. Run `./lab gcp artifacts VM`. This shows what the bucket has.
+2. If the bucket has the ISO and the base image, the deploy (G7) downloads them and does not build them.
+3. After the first complete build, publish the artifacts from a VM with `publisher = true`:
+   `./lab gcp publish VM iso base key` and optionally `./lab gcp publish VM image checkpoints` (run `./lab down` on the lab host first).
+
+> **CAUTION:** Memory checkpoints restore only on a lab host with the same runtime image, the same `LAB_CPU_MODEL`, and the same `lab.env`. Use the same machine type and minimum CPU platform on all VMs that share checkpoints. With `cpu_model = "host"`, a different CPU generation makes the restore fail. The fetch step compares fingerprints and skips checkpoints that do not agree.
+
+> **NOTE:** Optional fast clone: `./lab gcp image VM` makes a custom image of a fully built lab host. Set `image` for a new VM to that image family. The checkpoints on the lab host stay the reset method (`./lab reset`).
+
+### G7. Deploy the lab
+
+1. Open a second terminal on the workstation. Run `./lab gcp tunnel VM`. Keep it open.
+2. Run `./lab gcp deploy VM` (add `--checkpoints` to use published checkpoints).
+3. Give the console URLs that the tunnel prints to the user: `http://127.0.0.1:8006` (base build), `http://127.0.0.1:6111` to `6115` (DC1, SQL1-SQL4).
+4. Run `./lab gcp watch VM`. The deploy is complete when the log shows `DEPLOY COMPLETE`.
+5. For SQL access from the workstation, run `./lab gcp tunnel VM --sql`. Connect to `127.0.0.1,14330` (listener) or `127.0.0.1,14331` to `14334` (SQL1-SQL4).
+
+> **NOTE:** The networks 10.50.0.0/24 and 10.51.0.0/24 exist only on the lab host. Use the port forwards, or `--socks PORT` for a SOCKS proxy.
+
+> **NOTE:** A spot VM can be preempted. Then it stops and keeps its disk. Run `./lab gcp start VM`, then `./lab gcp deploy VM` again. The deploy continues from the last completed stage (base image, checkpoint). An interrupted base build starts again.
+
+### G8. Tests
+
+1. Run `./lab gcp ssh VM`. Then do sections 8 and 10 on the lab host, in `~/sql-ag-lab`.
+
+### G9. Stop the lab host
+
+1. Run `./lab gcp stop VM` when you finish. Compute charges stop. Disk charges continue.
+2. Run `./lab gcp cost` to show the estimate to the user.
+3. To delete a VM, run `./lab gcp delete KEY`. Get approval from the user first.
+
+| Task (GCP) | Command |
+|---|---|
+| List lab VMs | `./lab gcp list` |
+| Start or stop | `./lab gcp start VM`, `./lab gcp stop VM` |
+| Shell on the lab host | `./lab gcp ssh VM` |
+| Consoles and SQL | `./lab gcp tunnel VM [--sql]` |
+| Add one VM from tfvars | `./lab gcp create KEY` |
+

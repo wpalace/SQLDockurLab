@@ -1,0 +1,221 @@
+#!/usr/bin/env bash
+# =============================================================================
+# ./lab gcp: Google Cloud deployment target for sql-ag-lab.
+# Terraform makes the infrastructure; gcloud is used only for SSH/IAP tunnels and
+# instance start/stop. The lab itself runs unchanged on the VM (./lab ...).
+# =============================================================================
+set -Eeuo pipefail
+GCP_DIR=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
+LAB_ROOT=$(cd "$GCP_DIR/../.." && pwd)
+TF_SHARED="$GCP_DIR/terraform/shared"
+TF_VMS="$GCP_DIR/terraform/vms"
+REMOTE_DIR=${LAB_GCP_REMOTE_DIR:-sql-ag-lab}   # relative to the remote home directory
+export PATH="$PATH:$HOME/.local/bin:$HOME/.local/google-cloud-sdk/bin"
+
+_t() { [[ -t 1 ]] && printf '%s' "$1"; }
+log()  { printf '%s[gcp %s]%s %s\n' "$(_t $'\e[36m')" "$(date +%H:%M:%S)" "$(_t $'\e[0m')" "$*"; }
+ok()   { printf '%s  ok%s  %s\n' "$(_t $'\e[32m')" "$(_t $'\e[0m')" "$*"; }
+warn() { printf '%s  warn%s %s\n' "$(_t $'\e[33m')" "$(_t $'\e[0m')" "$*" >&2; }
+die()  { printf '%s  error%s %s\n' "$(_t $'\e[31m')" "$(_t $'\e[0m')" "$*" >&2; exit 1; }
+
+usage() {
+  cat <<'USAGE'
+Usage: ./lab gcp <command> [args]          (VM = key like bill-1, or the full VM name)
+
+Infrastructure (Terraform; ROOT = shared | vms, default vms):
+  init [ROOT]            terraform init (uses backend.tf when present)
+  plan [ROOT]            terraform plan
+  apply [ROOT]           terraform apply  (shared: once per project; vms: your VMs)
+  destroy [ROOT]         terraform destroy
+  create VM | delete VM  apply/destroy one entry of vms in terraform.tfvars
+  tf-check               terraform fmt -check + validate for both roots (no credentials)
+
+VM lifecycle (gcloud):
+  list                   lab VMs in the project (label app=sql-ag-lab)
+  start VM | stop VM     start / stop (stop when idle: compute charges stop, disk charges stay)
+  ssh VM [command]       SSH through IAP
+  check VM               verify GCE settings + VM prerequisites (nested KVM, docker, disk,
+                         bucket, clock), then ./lab doctor on the VM
+  push VM                copy this repository (committed HEAD) to ~/sql-ag-lab on the VM
+  deploy VM [--checkpoints]
+                         run the lab build on the VM in the background (resumable)
+  watch VM               follow the deploy log on the VM
+  tunnel VM [--sql] [--socks PORT]
+                         forward VNC (8006, 6111-6115) and optionally SQL to this machine
+  image VM [FAMILY]      make a custom image of the VM disk (fast clone path; VM is stopped)
+
+Artifacts (shared bucket; run on the VM with the VM service account):
+  artifacts VM           show the bucket manifest
+  publish VM ITEM...     upload iso base key image checkpoints | all (publisher VMs only)
+  fetch VM [--checkpoints]
+                         download artifacts that exist into the VM's lab directory
+  cost                   rough cost estimate for the default VM size
+USAGE
+}
+
+need() { command -v "$1" >/dev/null || die "$1 not found. ${2:-}"; }
+tf() { need terraform "Install Terraform >= 1.5 (https://developer.hashicorp.com/terraform/install)."; terraform "$@"; }
+tf_root() { case ${1:-vms} in shared) echo "$TF_SHARED" ;; vms) echo "$TF_VMS" ;; *) die "ROOT must be shared or vms" ;; esac; }
+tf_need_vars() { [[ -f "$1/terraform.tfvars" ]] || die "missing $1/terraform.tfvars: copy terraform.tfvars.example and fill it in (MAKE.md G2)"; }
+tf_out() { tf -chdir="$TF_VMS" output -raw "$1" 2>/dev/null; }
+gc() { need gcloud "Install the Google Cloud CLI (https://cloud.google.com/sdk/docs/install)."; gcloud "$@"; }
+
+# Project/zone: terraform outputs of the vms root, else environment.
+ctx() {
+  PROJECT=${GCP_PROJECT:-$(tf_out project_id || true)}
+  ZONE=${GCP_ZONE:-$(tf_out zone || true)}
+  PREFIX=${GCP_NAME_PREFIX:-sqlag}
+  [[ -n $PROJECT && -n $ZONE ]] || die "unknown project/zone: run ./lab gcp apply first, or set GCP_PROJECT and GCP_ZONE"
+}
+vm_name() { local n=${1:?VM required}; [[ $n == "$PREFIX"-* ]] && echo "$n" || echo "$PREFIX-$n"; }
+gssh() { # NAME [ssh args...]
+  local n=$1; shift
+  gc compute ssh "$n" --project "$PROJECT" --zone "$ZONE" --tunnel-through-iap --quiet "$@"
+}
+rcmd() { local n=$1; shift; gssh "$n" --command "$*"; }
+
+cmd_tf() { # ACTION ROOT
+  local action=$1 dir; dir=$(tf_root "${2:-vms}")
+  case $action in
+    init) tf -chdir="$dir" init -upgrade ;;
+    plan) tf_need_vars "$dir"; tf -chdir="$dir" plan ;;
+    apply) tf_need_vars "$dir"; tf -chdir="$dir" apply ;;
+    destroy) tf_need_vars "$dir"; tf -chdir="$dir" destroy ;;
+  esac
+}
+cmd_tf_check() {
+  local d rc=0
+  for d in "$TF_SHARED" "$TF_VMS"; do
+    log "terraform fmt/validate ${d#"$LAB_ROOT"/}"
+    tf -chdir="$d" fmt -check -diff || rc=1
+    tf -chdir="$d" init -backend=false -input=false >/dev/null || rc=1
+    tf -chdir="$d" validate || rc=1
+  done
+  return $rc
+}
+cmd_create() { local k=${1:?usage: create KEY}; tf_need_vars "$TF_VMS"; tf -chdir="$TF_VMS" apply -target="google_compute_instance.lab[\"$k\"]"; }
+cmd_delete() { local k=${1:?usage: delete KEY}; tf_need_vars "$TF_VMS"; tf -chdir="$TF_VMS" destroy -target="google_compute_instance.lab[\"$k\"]"; }
+
+cmd_list() {
+  ctx
+  gc compute instances list --project "$PROJECT" --filter="labels.app=sql-ag-lab" \
+    --format="table(name,zone.basename(),machineType.basename(),status,labels.owner,scheduling.provisioningModel,advancedMachineFeatures.enableNestedVirtualization:label=NESTED)"
+}
+
+# ----------------------------------------------------------------------------- check --
+cmd_check() {
+  ctx; local n; n=$(vm_name "$1"); local fails=0
+  log "GCE settings of $n"
+  local d; d=$(gc compute instances describe "$n" --project "$PROJECT" --zone "$ZONE" \
+    --format="value(status,advancedMachineFeatures.enableNestedVirtualization,minCpuPlatform,cpuPlatform,machineType.basename(),scheduling.provisioningModel,networkInterfaces[0].accessConfigs[0].natIP)") \
+    || die "VM $n not found in $PROJECT/$ZONE"
+  local status nested minp cpup mtype model natip
+  IFS=$'\t' read -r status nested minp cpup mtype model natip <<<"$d"
+  [[ $status == RUNNING ]] && ok "status RUNNING" || { warn "status $status: run ./lab gcp start $1"; fails=$((fails + 1)); }
+  [[ ${nested,,} == true ]] && ok "enableNestedVirtualization=true" \
+    || { warn "nested virtualization OFF: set enable_nested_virtualization (terraform vms root) and apply"; fails=$((fails + 1)); }
+  [[ -n $minp ]] && ok "minCpuPlatform=$minp (running on $cpup)" || warn "no minCpuPlatform: checkpoints may not restore on other CPUs"
+  case $mtype in e2-*|n2d-*|c2d-*|c3d-*|c4d-*|t2d-*|t2a-*|c4a-*) warn "$mtype does not support nested virtualization"; fails=$((fails + 1)) ;;
+    *) ok "machine type $mtype ($model)" ;; esac
+  [[ -z $natip ]] && ok "no external IP (IAP only)" || warn "external IP $natip present"
+  local line; line=$(tf_out vm_lines | awk -v n="$n" '$2 == n') || true
+  if [[ -n $line ]]; then
+    local _k _n emt emp; read -r _k _n emt emp <<<"$line"; emp=${emp//_/ }
+    [[ $emt == "$mtype" ]] && ok "machine type matches terraform" || warn "machine type $mtype, terraform says $emt"
+    [[ $emp == "$minp" ]] && ok "min CPU platform matches terraform" || warn "min CPU platform '$minp', terraform says '$emp'"
+  else warn "$n is not in the terraform vms outputs (created by hand?)"; fi
+  (( fails == 0 )) || die "fix the GCE settings above first"
+  log "prerequisites on the VM"
+  gc compute scp --project "$PROJECT" --zone "$ZONE" --tunnel-through-iap --quiet "$GCP_DIR/vm-check.sh" "$n:/tmp/vm-check.sh"
+  rcmd "$n" "bash /tmp/vm-check.sh" || die "VM prerequisites failed (see FAIL lines)"
+  if rcmd "$n" "test -x $REMOTE_DIR/lab"; then log "./lab doctor on the VM"; rcmd "$n" "cd $REMOTE_DIR && ./lab doctor" || die "./lab doctor reported problems"
+  else warn "repository not on the VM yet: run ./lab gcp push $1, then check again"; fi
+  ok "$n is ready for the lab"
+}
+
+# ------------------------------------------------------------------------ push/deploy --
+cmd_push() {
+  ctx; local n; n=$(vm_name "$1")
+  git -C "$LAB_ROOT" diff --quiet HEAD -- || warn "uncommitted changes are NOT copied (commit first)"
+  local b; b=$(mktemp -d)/sql-ag-lab.bundle; local br; br=$(git -C "$LAB_ROOT" rev-parse --abbrev-ref HEAD)
+  git -C "$LAB_ROOT" bundle create "$b" HEAD "$br" 2>/dev/null
+  gc compute scp --project "$PROJECT" --zone "$ZONE" --tunnel-through-iap --quiet "$b" "$n:/tmp/sql-ag-lab.bundle"
+  rcmd "$n" "set -e; id -nG | grep -qw docker || sudo usermod -aG docker \"\$USER\"
+    if [ -d $REMOTE_DIR/.git ]; then git -C $REMOTE_DIR pull --ff-only /tmp/sql-ag-lab.bundle $br
+    else git clone -q -b $br /tmp/sql-ag-lab.bundle $REMOTE_DIR; fi
+    git -C $REMOTE_DIR log --oneline -1"
+  rm -rf "$(dirname "$b")"; ok "repository on $n:~/$REMOTE_DIR (reconnect once so group docker applies)"
+}
+cmd_deploy() {
+  ctx; local n; n=$(vm_name "$1"); shift
+  rcmd "$n" "cd $REMOTE_DIR && setsid nohup deploy/gcp/remote-deploy.sh $* > logs-gcp-deploy.log 2>&1 < /dev/null & sleep 2; tail -3 $REMOTE_DIR/logs-gcp-deploy.log"
+  ok "deploy started on $n. Follow it: ./lab gcp watch $1   Consoles: ./lab gcp tunnel $1"
+}
+cmd_watch() { ctx; local n; n=$(vm_name "$1"); gssh "$n" --command "tail -n 40 -F $REMOTE_DIR/logs-gcp-deploy.log $REMOTE_DIR/logs/progress.log" -- -t; }
+
+cmd_tunnel() {
+  ctx; local n; n=$(vm_name "$1"); shift; local sql=0 socks="" p
+  while (( $# )); do case $1 in --sql) sql=1 ;; --socks) socks=$2; shift ;; *) die "unknown option $1" ;; esac; shift; done
+  local f=(-N -L 8006:127.0.0.1:8006)
+  for p in 6111 6112 6113 6114 6115; do f+=(-L "$p:127.0.0.1:$p"); done
+  if (( sql )); then  # the lab networks exist only on the VM: forward each SQL endpoint
+    f+=(-L 14330:10.50.0.60:1433 -L 14339:10.51.0.60:1433 -L 14331:10.50.0.11:1433 -L 14332:10.50.0.12:1433 -L 14333:10.51.0.13:1433 -L 14334:10.51.0.14:1433)
+  fi
+  [[ -n $socks ]] && f+=(-D "$socks")
+  log "tunnel to $n (Ctrl-C to stop)"
+  echo "  base build console  http://127.0.0.1:8006"
+  for p in 6111 6112 6113 6114 6115; do echo "  VM console          http://127.0.0.1:$p/vnc.html?autoconnect=1&resize=scale&reconnect=1"; done
+  if (( sql )); then
+    echo "  SQL listener        127.0.0.1,14330 (subnet A IP; use 14339 when the primary is on SQL3/SQL4)"
+    echo "  SQL1..SQL4          127.0.0.1,14331 .. 127.0.0.1,14334 (SQL auth; see ./lab info on the VM)"
+  fi
+  [[ -n $socks ]] && echo "  SOCKS proxy         127.0.0.1:$socks (reach 10.50.x / 10.51.x directly through it)"
+  gssh "$n" -- "${f[@]}"
+}
+
+cmd_image() {
+  ctx; local n; n=$(vm_name "$1"); local fam=${2:-sqlag-lab-built}
+  log "stopping $n to take a consistent disk image"; gc compute instances stop "$n" --project "$PROJECT" --zone "$ZONE"
+  local img; img="$fam-$(date +%Y%m%d-%H%M)"
+  gc compute images create "$img" --project "$PROJECT" --source-disk "$n" --source-disk-zone "$ZONE" --family "$fam" \
+    --labels app=sql-ag-lab
+  ok "image $img (family $fam). New VMs from it: set image = \"projects/$PROJECT/global/images/family/$fam\" in vms terraform.tfvars"
+}
+
+cmd_cost() {
+  cat <<'COST'
+Rough ESTIMATE from public us-central1 list prices (2025-2026); check the Pricing Calculator:
+  n2-standard-16 standard  ~ $0.78 / h        spot  ~ $0.19-0.25 / h (varies)
+  pd-ssd 300 GB            ~ $51 / month      (~ $0.07 / h, charged also while STOPPED)
+  Cloud NAT                ~ $0.045 / h per gateway + $0.045 / GB processed
+  Bucket (Standard)        ~ $0.02 / GB-month (ISO 1.2 GB + base 7 GB + checkpoints ~25-40 GB)
+  Example: one spot VM, 40 h/month running: ~$10 compute + $51 disk + NAT ~ $35 = about $95 / month.
+Stop VMs when idle (./lab gcp stop VM). Delete them when not needed for days (disk is the main idle cost).
+COST
+}
+
+main() {
+  local c=${1:-help}; shift || true
+  case $c in
+    help|-h|--help) usage ;;
+    init|plan|apply|destroy) cmd_tf "$c" "$@" ;;
+    tf-check) cmd_tf_check ;;
+    create) cmd_create "$@" ;;
+    delete) cmd_delete "$@" ;;
+    list) cmd_list ;;
+    start|stop) ctx; gc compute instances "$c" "$(vm_name "${1:?VM required}")" --project "$PROJECT" --zone "$ZONE" ;;
+    ssh) ctx; local n; n=$(vm_name "${1:?VM required}"); shift; if (( $# )); then rcmd "$n" "$*"; else gssh "$n"; fi ;;
+    check) cmd_check "${1:?VM required}" ;;
+    push) cmd_push "${1:?VM required}" ;;
+    deploy) cmd_deploy "${1:?VM required}" "${@:2}" ;;
+    watch) cmd_watch "${1:?VM required}" ;;
+    tunnel) cmd_tunnel "${1:?VM required}" "${@:2}" ;;
+    image) cmd_image "$@" ;;
+    artifacts) ctx; rcmd "$(vm_name "${1:?VM required}")" "cd $REMOTE_DIR && deploy/gcp/artifacts.sh status" ;;
+    publish) ctx; local n; n=$(vm_name "${1:?VM required}"); shift; rcmd "$n" "cd $REMOTE_DIR && deploy/gcp/artifacts.sh publish $*" ;;
+    fetch) ctx; local n; n=$(vm_name "${1:?VM required}"); shift; rcmd "$n" "cd $REMOTE_DIR && deploy/gcp/artifacts.sh fetch $*" ;;
+    cost) cmd_cost ;;
+    *) usage; die "unknown command: $c" ;;
+  esac
+}
+main "$@"

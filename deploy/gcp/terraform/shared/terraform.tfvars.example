@@ -1,0 +1,25 @@
+# Shared lab infrastructure: apply ONCE per project (team admin).
+# Copy to terraform.tfvars (gitignored) and fill in the values marked REQUIRED.
+
+project_id  = "my-gcp-project" # REQUIRED
+region      = "us-central1"
+bucket_name = "my-team-sqlag-artifacts" # REQUIRED, globally unique
+
+# Who may create lab VMs, SSH through IAP and read artifacts.
+team_members = [
+  # "user:alice@example.com",
+  # "group:dba-team@example.com",
+]
+
+# Who may write artifacts with their own credentials (publisher VMs can always write).
+publishers = [
+  # "user:alice@example.com",
+]
+
+# Network: a dedicated VPC by default. Set create_network = false to reuse one.
+# create_network = true
+# network_name   = "sqlag-net"
+# subnet_name    = "sqlag-subnet"
+# subnet_cidr    = "10.200.0.0/24"  # must not overlap 10.50.0.0/24 or 10.51.0.0/24
+# enable_nat     = true             # egress without public IPs
+# grant_project_roles = true        # needs permission to change project IAM
