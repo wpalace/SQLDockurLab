@@ -10,7 +10,10 @@ exec 2>&1
 ROOT=$(cd "$(dirname "$0")/.." && pwd)
 WORK=${WORK:-/tmp/sql-ag-lab-e2e}
 rm -rf "$WORK"; mkdir -p "$WORK/images/base" "$WORK/images/test" "$WORK/media"
-"$ROOT/tests/fakeguest/build.sh" >/dev/null 2>&1 || [[ -f "$ROOT/tests/fakeguest/vmlinuz" ]]
+if [[ ! -f "$ROOT/tests/fakeguest/vmlinuz" || ! -f "$ROOT/tests/fakeguest/initrd.img" ]]; then
+  echo "--- building fake guest kernel/initrd"
+  "$ROOT/tests/fakeguest/build.sh" || { echo "FAIL could not build tests/fakeguest (see output above)"; exit 1; }
+fi
 cp "$ROOT/tests/fakeguest/vmlinuz" "$ROOT/tests/fakeguest/initrd.img" "$WORK/images/test/"
 sed -e "s|^LAB_IMAGES_DIR=.*|LAB_IMAGES_DIR=$WORK/images|" -e "s|^LAB_MEDIA_DIR=.*|LAB_MEDIA_DIR=$WORK/media|" \
     -e 's/^DC1_RAM_MB=.*/DC1_RAM_MB=256/' -e 's/^SQL_RAM_MB=.*/SQL_RAM_MB=384/' "$ROOT/lab.env" > "$WORK/test.env"
