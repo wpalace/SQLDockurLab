@@ -28,7 +28,7 @@ Read this file completely before you start. Do the procedures in sequence.
 |---|---|
 | `./lab doctor`, `./lab init` | 1-3 min |
 | SQL ISO download (1.17 GB) | 1-5 min |
-| `./lab build-base` | 35-60 min |
+| `./lab build-base` | 20-60 min |
 | `./lab provision` | 20-40 min |
 | `./lab save NAME` | 25-30 s |
 | `./lab reset` (fast, in place) | 2-3 s |
@@ -136,13 +136,13 @@ Do all these tests after provisioning. Record each result in the summary (sectio
 
 1. **TC1 Static checks.** Run `tests/validate.sh`. Expected: `ALL STATIC CHECKS PASSED`.
 2. **TC2 Engine test.** Run `tests/e2e-fakeguest.sh`. Expected: `all e2e checks passed`. Run it only when no lab is running, because it uses the same container names.
-3. **TC3 Reset loop.** Do these steps 10 times: run `./lab reset golden`, then `./lab health --deep`. Record each duration. Expected: each reset takes less than 60 s, and each result is `HEALTHY` with SQL1 as primary.
+3. **TC3 Reset loop.** Do these steps 10 times: run `./lab reset golden`, then `./lab health --deep --wait 60`. (Without `--wait`, a check right after a restore can show `unreachable` for a few seconds.) Record each duration. Expected: each reset takes less than 60 s, and each result is `HEALTHY` with SQL1 as primary.
 4. **TC4 Cross-subnet failover.** Run on SQL3:
    `./lab ssh SQL3 "Invoke-Sqlcmd -Query 'ALTER AVAILABILITY GROUP [LabAG] FAILOVER'"`.
-   Run `./lab health --deep`. Expected: `listener LabAGL -> SQL3` and `HEALTHY`.
+   Run `./lab health --deep --wait 60`. Expected: `listener LabAGL -> SQL3` and `HEALTHY`.
 5. **TC5 Failback.** Do TC4 again on SQL1. Expected: `listener LabAGL -> SQL1`.
-6. **TC6 Reset after change.** Run `./lab reset`, then `./lab health --deep`. Expected: SQL1 is primary, the status is `HEALTHY`, and `./lab status` shows `checkpoint: golden`.
-7. **TC7 Consoles.** Run `./lab vnc`. Expected: five tabs. Each tab title starts with `QEMU (`.
+6. **TC6 Reset after change.** Do TC4 again (SQL3 becomes primary). Run `./lab reset`, then `./lab health --deep --wait 60`. Expected: SQL1 is primary, the status is `HEALTHY`, and `./lab status` shows `checkpoint: golden`.
+7. **TC7 Consoles.** Run `./lab vnc`. Expected: five tabs. Each tab title starts with `QEMU (`. If you cannot see the browser, run `./lab vnc urls` and `curl -s -o /dev/null -w '%{http_code}' URL` for each URL. Expected: `200`. Ask the user to confirm that the tabs show the VM screens.
 8. When all the tests are complete, run `./lab reset`. Leave the lab running at golden.
 
 ## 9. Recover from failures
