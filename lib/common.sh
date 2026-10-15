@@ -28,6 +28,9 @@ load_env() {
   set -a
   # shellcheck disable=SC1090
   source "$envfile"
+  # Optional per-host overrides (gitignored), e.g. LAB_CPU_MODEL written by the GCP target.
+  # shellcheck disable=SC1091
+  [[ -f "$LAB_ROOT/lab.local.env" ]] && source "$LAB_ROOT/lab.local.env"
   set +a
   LAB_ENV_FILE=$envfile
   # Compose resolves relative paths against the compose file's directory; make them absolute.

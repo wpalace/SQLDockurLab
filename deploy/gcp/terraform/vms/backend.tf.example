@@ -1,0 +1,11 @@
+# Optional: keep Terraform state in GCS so the whole team shares it.
+# 1. Create a state bucket once (separate from the artifact bucket):
+#      gcloud storage buckets create gs://MY-TF-STATE --location=US-CENTRAL1 --uniform-bucket-level-access
+#      gcloud storage buckets update gs://MY-TF-STATE --versioning
+# 2. Copy this file to backend.tf, set the bucket, then run: ./lab gcp init
+terraform {
+  backend "gcs" {
+    bucket = "MY-TF-STATE"
+    prefix = "sql-ag-lab/vms" # one state per team; members may use terraform workspaces
+  }
+}

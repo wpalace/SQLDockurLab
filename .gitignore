@@ -10,3 +10,11 @@ tests/fakeguest/vmlinuz
 tests/fakeguest/initrd.img
 __pycache__/
 logs/
+lab.local.env
+**/.terraform/
+**/terraform.tfvars
+**/*.tfstate
+**/*.tfstate.*
+**/backend.tf
+**/.terraform.lock.hcl
+*.log

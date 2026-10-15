@@ -1,0 +1,8 @@
+output "project_id" { value = var.project_id }
+output "region" { value = var.region }
+output "network_name" { value = var.network_name }
+output "subnet_name" { value = var.subnet_name }
+output "network_tag" { value = var.network_tag }
+output "bucket_name" { value = google_storage_bucket.artifacts.name }
+output "vm_service_account" { value = google_service_account.vm.email }
+output "publisher_service_account" { value = google_service_account.publisher.email }

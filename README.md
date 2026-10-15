@@ -213,3 +213,13 @@ lib/                    common.sh (ssh/qmp/helpers), provision.sh (stage-2 orche
 tests/                  validate.sh (static), e2e-fakeguest.sh + fakeguest/ (runtime pipeline e2e)
 ci/                     GitHub Actions self-hosted runner example
 ```
+
+## Deployment targets
+
+The lab runs on any Linux host with KVM and Docker. `MAKE.md` section 1a selects the target:
+
+- **Local**: this computer (sections 3-10).
+- **GCP**: one Compute Engine VM per team member, with nested virtualization, made with Terraform
+  (`deploy/gcp/terraform/{shared,vms}`), reached through IAP (no public IP), spot by default.
+  A shared bucket holds the ISO, base image, and optionally the runtime image and checkpoints.
+  Command: `./lab gcp help`. Procedure: `MAKE.md` section G.

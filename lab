@@ -43,6 +43,10 @@ Utilities:
   log [MESSAGE]          create logs/progress.log; append a timestamped line
   watch                  open a terminal window that follows logs/progress.log
   net                    (re)create lab networks / pin bridge MACs (idempotent)
+
+Deployment targets:
+  gcp <command>          Google Cloud: VMs via Terraform, IAP SSH/tunnels, shared bucket
+                         (./lab gcp help)
 USAGE
 }
 
@@ -456,6 +460,7 @@ main() {
   local cmd=${1:-help}; shift || true
   case $cmd in
     help|-h|--help) usage; return 0 ;;
+    gcp) exec "$LAB_ROOT/deploy/gcp/lab-gcp" "$@" ;;   # deployment target: Google Cloud
   esac
   load_env
   case $cmd in build-base|provision|build|up|down|reset|save|delete|init)
