@@ -26,6 +26,15 @@ cp ~/Downloads/SQLServer2025-x64-ENU-EntDev.iso media/
 ./lab down
 ```
 
+Watch the VMs: `./lab vnc` opens Chromium on Hyprland workspace 6 (`LAB_VNC_WORKSPACE`) with one
+noVNC tab per VM; `./lab vnc build` opens the dockur install console (:8006). QEMU serves each
+console on `images/run/<vm>.vnc`; `./lab console` runs the websockify gateway on 127.0.0.1:6111-6115.
+
+Docker group: if `./lab doctor` says the session lacks group `docker`, log out and in, or run
+`printf '%s\n' './lab up' | newgrp docker`. Run `sudo ./lab net` once per host boot to pin the
+lab bridge MACs and add DOCKER-USER rules (without it, restores can see brief ARP/SSH timeouts).
+Step-by-step build procedure for agents: [MAKE.md](MAKE.md).
+
 Connect from the host: `sqlcmd -S tcp:10.50.0.60,1433 -U sa -P '<change me>' -C` (listener), or
 any node IP. `./lab info` prints everything. Use SQL auth from the host (see *Time*).
 
@@ -163,7 +172,8 @@ guests** (the build sandbox cannot run KVM guests).
 - `cpu host` checkpoints only restore on the same CPU model and QEMU version (the runtime image is
   pinned through its digest in the fingerprint). Rebuilding the runtime image invalidates checkpoints.
 - SQL 2025 setup flags (`/SQLMAXMEMORY`, PID `22222-...` for Enterprise Developer) come from the
-  docs, not a test run. Enable-HADR uses the WMI provider and falls back to the registry.
+  docs. Enable-Hadr uses `Enable-SqlAlwaysOn` (SQLPS); the registry fallback also grants the
+  service SID cluster access and registers the AG resource type (else error 35222 / 41105).
 - Docker ≥ 28 changed bridge filtering. Host→VM traffic doesn't depend on it, but verify
   cross-subnet with the e2e test. Rootful podman is untested.
 - Disk: base ~12 GB + 3 checkpoints × (5 disks of deltas + ~12-18 GB state) ≈ 70-100 GB.
