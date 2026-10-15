@@ -26,7 +26,11 @@ if ($res) {
         Stop-ClusterResource -InputObject $res -Wait 60 | Out-Null
         Start-ClusterGroup -Name $ag -Wait 120 | Out-Null
         Wait-Until -What "listener resources online" -TimeoutSeconds 120 -IntervalSeconds 2 -Condition {
-            -not (Get-ClusterResource | Where-Object { $_.OwnerGroup.Name -eq $ag -and $_.State -ne 'Online' })
+            # Multi-subnet: only the IP of the owner's subnet can be online (OR dependency), so
+            # ignore IP Address resources and require at least one of them online instead.
+            $r = @(Get-ClusterResource | Where-Object { $_.OwnerGroup.Name -eq $ag })
+            -not ($r | Where-Object { $_.ResourceType.Name -ne 'IP Address' -and $_.State -ne 'Online' }) -and
+            ($r | Where-Object { $_.ResourceType.Name -eq 'IP Address' -and $_.State -eq 'Online' })
         }
     }
 }
