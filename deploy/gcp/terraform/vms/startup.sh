@@ -28,6 +28,7 @@ for m in kvm tun vhost_net; do modprobe "$m" || true; done
 grep -q GenuineIntel /proc/cpuinfo && modprobe kvm_intel || modprobe kvm_amd || true
 [[ -w /sys/kernel/mm/ksm/run ]] && echo 1 > /sys/kernel/mm/ksm/run
 
+tz=$(md attributes/lab-timezone) && [[ -n $tz ]] && timedatectl set-timezone "$tz" || true
 cat > /etc/sql-ag-lab/gcp.env <<CONF
 LAB_GCP_BUCKET=$(md attributes/lab-bucket)
 LAB_GCP_CPU_MODEL=$(md attributes/lab-cpu-model)

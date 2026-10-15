@@ -257,7 +257,7 @@ Do all these tests after provisioning. Record each result in the summary (sectio
 
 1. Open a second terminal on the workstation. Run `./lab gcp tunnel VM`. Keep it open.
 2. Run `./lab gcp deploy VM` (add `--checkpoints` to use published checkpoints).
-3. Give the console URLs that the tunnel prints to the user: `http://127.0.0.1:8006` (base build), `http://127.0.0.1:6111` to `6115` (DC1, SQL1-SQL4).
+3. Give the console URLs that the tunnel prints to the user: `http://127.0.0.1:8006` (base build), `http://127.0.0.1:6111` to `6115` (DC1, SQL1-SQL4). If a local lab uses these ports on the workstation, the tunnel adds 10000 (`18006`, `16111` to `16115`). Use the URLs that the tunnel prints.
 4. Run `./lab gcp watch VM`. The deploy is complete when the log shows `DEPLOY COMPLETE`.
 5. For SQL access from the workstation, run `./lab gcp tunnel VM --sql`. Connect to `127.0.0.1,14330` (listener) or `127.0.0.1,14331` to `14334` (SQL1-SQL4).
 

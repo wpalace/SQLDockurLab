@@ -80,6 +80,7 @@ resource "google_compute_instance" "lab" {
     enable-oslogin = "TRUE"
     lab-bucket     = var.bucket_name
     lab-cpu-model  = each.value.cpu_model
+    lab-timezone   = var.timezone
     lab-owner      = each.value.owner
     startup-script = file("${path.module}/startup.sh")
   }
