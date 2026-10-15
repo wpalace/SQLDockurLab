@@ -39,18 +39,13 @@ Read this file completely before you start. Do the procedures in sequence.
 
 ## 3. Prerequisites and checks
 
-> **NOTE:** The expected host is Ubuntu 22.04 or 24.04. The lab is not yet tested on Ubuntu hardware. Record each Ubuntu-specific problem in the transcript.
-
-1. On Ubuntu, install the packages:
-   ```bash
-   sudo apt update
-   sudo apt install docker.io docker-compose-v2 openssh-client curl coreutils iproute2 cpu-checker xdg-utils
-   ```
-   If Docker CE is installed, use package `docker-compose-plugin` instead of `docker-compose-v2`.
-2. Run `kvm-ok`. The output must be `KVM acceleration can be used`.
-3. Add the user to groups `docker` and `kvm`: `sudo usermod -aG docker,kvm "$USER"`. Then the user must log out and log in.
-4. Load the network modules: `sudo modprobe tun vhost_net`.
+1. Make sure that the host is Linux on x86-64. Run `grep -Ec '(vmx|svm)' /proc/cpuinfo`. The result must be more than 0.
+2. Make sure that `/dev/kvm` exists. If it does not exist, enable virtualization in the firmware.
+3. Make sure that Docker Engine and Docker Compose v2 are installed. Run `docker info` and `docker compose version`. Both commands must succeed.
+4. Make sure that the user is in groups `docker` and `kvm`. Run `id -nG`. If a group is missing, tell the user to run `sudo usermod -aG docker,kvm "$USER"` and then log out and log in.
 5. Make sure that the host has 32 GB RAM or more. Make sure that it has 120 GB of free disk space or more.
+   Make sure that `curl`, `sha256sum`, and an OpenSSH client are installed. `xdg-open` is optional.
+   Make sure that `/dev/net/tun` exists. If it does not exist, run `sudo modprobe tun`.
 6. Run `./lab doctor`.
 7. Read every `warn` line in the output. Do the action that each line gives.
 8. If `doctor` reports that the session is not in group `docker`, do one of these steps:
@@ -60,7 +55,7 @@ Read this file completely before you start. Do the procedures in sequence.
 10. Run `tests/validate.sh`. It must show `ALL STATIC CHECKS PASSED`.
 11. If the user has root access, tell the user to run `sudo ./lab net` once after each host boot.
 
-> **CAUTION:** Do not use the Docker snap package. Its confinement can block `/dev/kvm` and tap devices.
+> **CAUTION:** Do not use Docker from a snap package. Its confinement can block `/dev/kvm` and tap devices.
 
 > **CAUTION:** Without `sudo ./lab net`, the bridge MAC addresses are not pinned, and the firewall rules are not added. Each `up` then shows a `could not pin MAC` warning. The lab still works. Right after a restore, SSH can time out for a few seconds; the lab scripts retry.
 
