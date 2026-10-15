@@ -39,9 +39,9 @@ prov_stage_cluster() {
 
 prov_stage_ag() {
   log "== stage 3/3: availability group + multi-subnet listener"
-  gstep SQL1 New-LabAg.ps1 || die "AG creation failed"
+  gstep SQL1 RunAs.ps1 New-LabAg.ps1 || die "AG creation failed"
   parallel_vms agjoin _agjoin SQL2 SQL3 SQL4 || die "AG join failed"
-  gstep SQL1 Add-LabListener.ps1 || die "listener creation failed"
+  gstep SQL1 RunAs.ps1 Add-LabListener.ps1 || die "listener creation failed"
   grun SQL1 Test-Lab.ps1 -WaitSeconds 600 || die "lab is not healthy after provisioning"
 }
 
@@ -63,6 +63,7 @@ cmd_provision() {
   if [[ -z "$from" ]]; then
     [[ -f "$LAB_MEDIA_DIR/$LAB_SQL_ISO" ]] || die "SQL ISO missing: $LAB_MEDIA_DIR/$LAB_SQL_ISO"
     log "booting all VMs from the base image (LAB_MODE=boot)"
+    rm -f "$STATE_DIR/active_checkpoint"   # fresh boot: new checkpoints descend from base
     LAB_MODE=boot compose up -d --force-recreate
     prov_wait_all_ssh
     prov_push_all

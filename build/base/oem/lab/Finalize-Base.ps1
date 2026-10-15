@@ -15,6 +15,11 @@ function Publish-Status([string]$name) {
 }
 Unregister-ScheduledTask -TaskName 'LabFinalizeBase' -Confirm:$false -ErrorAction SilentlyContinue
 Start-Sleep -Seconds 30   # let boot-time services settle
+trap {
+    Write-Warning "FATAL: $($_.Exception.Message) at $($_.InvocationInfo.PositionMessage)"
+    Publish-Status 'phase2.failed'
+    break
+}
 Publish-Status 'phase2.started'
 
 Step 'ngen queued items (otherwise .NET recompiles after every restore)'

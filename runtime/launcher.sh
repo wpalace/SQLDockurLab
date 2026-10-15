@@ -30,7 +30,8 @@ IMAGES=${LAB_IMAGES:-/images}
 QMP_SOCK=/run/lab/qmp.sock
 OVMF_CODE=${LAB_OVMF_CODE:-/usr/share/OVMF/OVMF_CODE_4M.fd}
 OVMF_VARS=${LAB_OVMF_VARS:-/usr/share/OVMF/OVMF_VARS_4M.fd}
-mkdir -p /run/lab
+mkdir -p /run/lab "$IMAGES/run"
+VNC_SOCK="$IMAGES/run/${VM_NAME,,}.vnc"; rm -f "$VNC_SOCK"
 rm -f "$QMP_SOCK"
 
 # ---------------------------------------------------------------- networking --
@@ -124,7 +125,9 @@ build_cmd() {
     -device virtio-balloon-pci,id=balloon0
     -device qemu-xhci,id=xhci -device usb-tablet,bus=xhci.0
     -vga std
-    -vnc "0.0.0.0:0"
+    # Console on a unix socket under /images/run: the container's eth0 is bridged into
+    # the VM, so a published TCP port would reach the guest, not QEMU.
+    -vnc "unix:$VNC_SOCK"
     -serial none -monitor none
     -qmp "unix:$QMP_SOCK,server=on,wait=off"
   )

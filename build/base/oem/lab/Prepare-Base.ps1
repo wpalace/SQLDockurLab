@@ -26,6 +26,16 @@ function Publish-Status([string]$name) {
     }
 }
 
+# New-Item -Force on an existing registry key tries to delete and recreate it, which
+# fails on keys with protected subkeys (e.g. ServerManager). Only create when missing.
+function Initialize-RegKey([string]$path) { if (-not (Test-Path $path)) { New-Item -Path $path -Force | Out-Null } }
+# Any terminating error: publish a failure marker + logs so the host stops waiting.
+trap {
+    Write-Warning "FATAL: $($_.Exception.Message) at $($_.InvocationInfo.PositionMessage)"
+    Publish-Status 'phase1.failed'
+    break
+}
+
 $cfg = Get-Content "$LabRoot\generated\lab-config.json" -Raw | ConvertFrom-Json
 
 # SMB guest access to dockur's share (2025 requires signing / blocks guest by default).
@@ -88,7 +98,7 @@ foreach ($svc in 'wuauserv', 'UsoSvc', 'WaaSMedicSvc', 'DiagTrack', 'dmwappushse
     }
 }
 $au = 'HKLM:\SOFTWARE\Policies\Microsoft\Windows\WindowsUpdate\AU'
-New-Item -Path $au -Force | Out-Null
+Initialize-RegKey $au
 Set-ItemProperty $au -Name NoAutoUpdate -Value 1 -Type DWord
 $taskPaths = @(
     '\Microsoft\Windows\Defrag\', '\Microsoft\Windows\Server Manager\', '\Microsoft\Windows\UpdateOrchestrator\',
@@ -102,10 +112,10 @@ foreach ($tp in $taskPaths) {
         Try-Do "disable task $($_.TaskName)" { $_ | Disable-ScheduledTask | Out-Null }
     }
 }
-New-Item 'HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion\Schedule\Maintenance' -Force | Out-Null
+Initialize-RegKey 'HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion\Schedule\Maintenance'
 Set-ItemProperty 'HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion\Schedule\Maintenance' -Name MaintenanceDisabled -Value 1 -Type DWord
 Set-ItemProperty 'HKLM:\SOFTWARE\Microsoft\Windows\Windows Error Reporting' -Name Disabled -Value 1 -Type DWord -ErrorAction SilentlyContinue
-New-Item 'HKLM:\SOFTWARE\Microsoft\ServerManager' -Force | Out-Null
+Initialize-RegKey 'HKLM:\SOFTWARE\Microsoft\ServerManager'
 Set-ItemProperty 'HKLM:\SOFTWARE\Microsoft\ServerManager' -Name DoNotOpenServerManagerAtLogon -Value 1 -Type DWord
 
 Step 'Power, pagefile, networking defaults'
@@ -126,7 +136,7 @@ $nl = 'HKLM:\SYSTEM\CurrentControlSet\Services\Netlogon\Parameters'
 Set-ItemProperty $nl -Name DisablePasswordChange -Value 1 -Type DWord
 # Allow clean ACPI shutdown from the lock screen; no shutdown event tracker.
 Set-ItemProperty 'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Policies\System' -Name shutdownwithoutlogon -Value 1 -Type DWord
-New-Item 'HKLM:\SOFTWARE\Policies\Microsoft\Windows NT\Reliability' -Force | Out-Null
+Initialize-RegKey 'HKLM:\SOFTWARE\Policies\Microsoft\Windows NT\Reliability'
 Set-ItemProperty 'HKLM:\SOFTWARE\Policies\Microsoft\Windows NT\Reliability' -Name ShutdownReasonOn -Value 0 -Type DWord
 # Remote UAC filtering off for local admin accounts (lab convenience for remote mgmt).
 Set-ItemProperty 'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Policies\System' -Name LocalAccountTokenFilterPolicy -Value 1 -Type DWord

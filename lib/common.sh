@@ -36,7 +36,7 @@ load_env() {
   mkdir -p "$STATE_DIR/logs"
   DOCKER=${DOCKER:-docker}
   # shellcheck disable=SC2034
-  if [[ $EUID -eq 0 ]]; then SUDO=; else SUDO=sudo; fi
+  if [[ $EUID -eq 0 ]]; then SUDO=; else SUDO="sudo -n"; fi
 }
 
 compose() {
@@ -74,7 +74,7 @@ parallel_vms() { # <action-name> <fn> <vm...>
 
 # ------------------------------------------------------------------------- ssh --
 SSH_OPTS=(-i "$SSH_KEY" -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o LogLevel=ERROR
-          -o BatchMode=yes -o ConnectTimeout=5 -o ServerAliveInterval=15 -o ServerAliveCountMax=4)
+          -o BatchMode=yes -o ConnectTimeout=5 -o ConnectionAttempts=6 -o ServerAliveInterval=15 -o ServerAliveCountMax=4)
 # shellcheck disable=SC2029  # remote command is built locally on purpose
 gssh() { # <VM> <remote powershell command string>
   ssh "${SSH_OPTS[@]}" "Administrator@$(vm_ip "$1")" "$2"
@@ -82,8 +82,8 @@ gssh() { # <VM> <remote powershell command string>
 # Run a PowerShell snippet via -EncodedCommand (no quoting problems).
 gps() { # <VM> <powershell code>
   local enc
-  enc=$(printf '%s' "$2" | iconv -f utf-8 -t utf-16le | base64 -w0)
-  gssh "$1" "powershell.exe -NoProfile -NonInteractive -EncodedCommand $enc"
+  enc=$(printf '%s' "\$ProgressPreference='SilentlyContinue'; $2" | iconv -f utf-8 -t utf-16le | base64 -w0)
+  gssh "$1" "powershell.exe -NoProfile -NonInteractive -OutputFormat Text -EncodedCommand $enc"
 }
 # Run a guest script from C:\Lab\guest; propagates its exit code.
 grun() { # <VM> <Script.ps1> [args...]
@@ -119,14 +119,17 @@ reboot_wait() { # <VM>
   done
   ok "$vm back after $((SECONDS - t0))s"
 }
-# Run a guest script; reboot+wait when it exits 3010; fail otherwise.
+# Run a guest script; reboot+wait when it exits 3010; fail otherwise. (ssh truncates exit codes to 8 bits: 3010 arrives as 194)
 gstep() { # <VM> <Script.ps1> [args...]
   local vm=$1 rc=0
   log "$vm: ${*:2}"
+  # Right after a restore a busy guest can miss the host's first ARP probes; make sure
+  # SSH answers before running a step (ConnectionAttempts covers the rest).
+  wait_ssh "$vm" 120 || true
   grun "$@" || rc=$?
   case $rc in
     0) return 0 ;;
-    3010) reboot_wait "$vm" ;;
+    3010|194) reboot_wait "$vm" ;;
     *) warn "$vm: ${2} exited $rc"; return "$rc" ;;
   esac
 }

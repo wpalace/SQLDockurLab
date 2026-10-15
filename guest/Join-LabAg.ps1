@@ -3,6 +3,7 @@
 $c = Get-LabConfig
 $ag = $c.agName; $db = $c.agDatabase
 Wait-LabSql
+Wait-LabHadrReady
 $joined = (Invoke-LabSql -Query "SELECT COUNT(*) AS n FROM sys.availability_groups WHERE name = N'$ag'").Rows[0].n
 if ($joined -eq 0) {
     Write-Step "Joining $ag"

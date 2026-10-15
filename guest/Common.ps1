@@ -7,6 +7,7 @@ Set-StrictMode -Version Latest
 $ErrorActionPreference = 'Stop'
 $ProgressPreference = 'SilentlyContinue'
 $script:LabGuestRoot = $PSScriptRoot
+$script:LabConfig = $null   # StrictMode: must exist before Get-LabConfig reads it
 New-Item -ItemType Directory -Force -Path 'C:\Lab\logs' | Out-Null
 
 function Write-Step([string]$Message) { Write-Host "==> [$env:COMPUTERNAME $(Get-Date -Format HH:mm:ss)] $Message" }
@@ -136,4 +137,44 @@ Set-Content -Path '$rcFile' -Value `$rc
     } finally {
         Unregister-ScheduledTask -TaskName $task -Confirm:$false -ErrorAction SilentlyContinue
     }
+}
+
+# HADR replica manager attaches to WSFC asynchronously after the SQL service starts
+# (SERVERPROPERTY HadrManagerStatus: 0 = starting, 1 = running, 2 = failed). If SQL Server
+# started before the local cluster service was up, it can stay at "Waiting for local WSFC
+# service to start" indefinitely; the fix is to restart SQL Server once the node is Up.
+function Get-LabHadrStatus {
+    try { [int](Invoke-LabSql -Query "SELECT CAST(SERVERPROPERTY('HadrManagerStatus') AS int) AS s").Rows[0].s } catch { -1 }
+}
+# The SQL Server service SID must be in the cluster ACL or the replica manager waits for
+# WSFC forever (dm_hadr_cluster stays empty). Enable-SqlAlwaysOn/WMI usually add it; the
+# registry fallback does not. Idempotent.
+function Grant-LabSqlClusterAccess {
+    Grant-ClusterAccess -User 'NT SERVICE\MSSQLSERVER' -Full -ErrorAction Stop | Out-Null
+}
+# The 'SQL Server Availability Group' cluster resource type is registered by the WMI /
+# Configuration Manager enable path, not by the registry fallback; CREATE AVAILABILITY GROUP
+# then fails with 41105. Register it from hadrres.dll if missing. Idempotent, cluster-wide.
+function Register-LabAgResourceType {
+    $name = 'SQL Server Availability Group'
+    if (-not (Get-ClusterResourceType -Name $name -ErrorAction SilentlyContinue)) {
+        Write-Step "Registering cluster resource type '$name'"
+        Add-ClusterResourceType -Name $name -Dll "$env:windir\System32\hadrres.dll" -DisplayName $name -ErrorAction Stop | Out-Null
+    }
+}
+function Wait-LabHadrReady([int]$TimeoutSeconds = 300) {
+    try { Register-LabAgResourceType } catch { Write-Warning "AG resource type: $($_.Exception.Message)" }
+    $deadline = (Get-Date).AddSeconds(30)
+    while ((Get-Date) -lt $deadline) { if ((Get-LabHadrStatus) -eq 1) { return }; Start-Sleep -Seconds 3 }
+    Write-Step 'HADR manager not attached to WSFC; restarting SQL Server once the cluster node is Up'
+    Start-Service ClusSvc -ErrorAction SilentlyContinue
+    Grant-LabSqlClusterAccess
+    Wait-Until -What "cluster node $env:COMPUTERNAME Up" -TimeoutSeconds 180 -IntervalSeconds 3 -Condition {
+        (Get-ClusterNode -Name $env:COMPUTERNAME -ErrorAction Stop).State -eq 'Up'
+    }
+    Restart-Service MSSQLSERVER -Force
+    Start-Service SQLSERVERAGENT -ErrorAction SilentlyContinue
+    Wait-LabSql
+    Wait-Until -What 'HADR manager attached to WSFC' -TimeoutSeconds $TimeoutSeconds -IntervalSeconds 3 -Condition { (Get-LabHadrStatus) -eq 1 }
+    Write-Ok 'HADR manager running'
 }

@@ -36,7 +36,17 @@ foreach ($net in $c.netA, $c.netB) {
     $o = $net.Split('/')[0].Split('.')
     $zone = "$($o[2]).$($o[1]).$($o[0]).in-addr.arpa"
     if (-not (Get-DnsServerZone -Name $zone -ErrorAction SilentlyContinue)) {
-        Add-DnsServerPrimaryZone -NetworkId $net -ReplicationScope Domain -DynamicUpdate Secure
+        # Right after promotion the DomainDnsZones partition may not be ready yet
+        # (WIN32 9903), so retry for a while, then fall back to a file-backed zone.
+        $made = $false
+        for ($i = 0; $i -lt 24 -and -not $made; $i++) {
+            try { Add-DnsServerPrimaryZone -NetworkId $net -ReplicationScope Domain -DynamicUpdate Secure; $made = $true }
+            catch { Start-Sleep -Seconds 5 }
+        }
+        if (-not $made) {
+            Write-Warning "AD-integrated $zone unavailable; creating a file-backed zone"
+            Add-DnsServerPrimaryZone -NetworkId $net -ZoneFile "$zone.dns" -DynamicUpdate NonsecureAndSecure
+        }
     }
 }
 # Air-gapped lab: no root hints/forwarders, so failed external lookups return instantly.

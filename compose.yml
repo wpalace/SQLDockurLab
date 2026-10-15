@@ -63,7 +63,6 @@ services:
       VM_CPUS: ${DC1_CPUS}
       VM_SMBIOS_SERIAL: "LAB;DC1;${DC1_IP};${LAB_PREFIX};${LAB_NET_A_ROUTER};${DC1_IP}"
       LAB_TEST_APPEND: "lab.ip=${DC1_IP}/${LAB_PREFIX} lab.gw=${LAB_NET_A_ROUTER}"
-    ports: ["${LAB_VNC_BIND:-127.0.0.1}:${DC1_VNC_PORT:-5911}:5900"]
     networks:
       lab_a: { ipv4_address: "${DC1_IP}" }
 
@@ -79,7 +78,6 @@ services:
       VM_CDROM: /media/${LAB_SQL_ISO}
       VM_SMBIOS_SERIAL: "LAB;SQL1;${SQL1_IP};${LAB_PREFIX};${LAB_NET_A_ROUTER};${DC1_IP}"
       LAB_TEST_APPEND: "lab.ip=${SQL1_IP}/${LAB_PREFIX} lab.gw=${LAB_NET_A_ROUTER}"
-    ports: ["${LAB_VNC_BIND:-127.0.0.1}:${SQL1_VNC_PORT:-5912}:5900"]
     networks:
       lab_a: { ipv4_address: "${SQL1_IP}" }
 
@@ -95,7 +93,6 @@ services:
       VM_CDROM: /media/${LAB_SQL_ISO}
       VM_SMBIOS_SERIAL: "LAB;SQL2;${SQL2_IP};${LAB_PREFIX};${LAB_NET_A_ROUTER};${DC1_IP}"
       LAB_TEST_APPEND: "lab.ip=${SQL2_IP}/${LAB_PREFIX} lab.gw=${LAB_NET_A_ROUTER}"
-    ports: ["${LAB_VNC_BIND:-127.0.0.1}:${SQL2_VNC_PORT:-5913}:5900"]
     networks:
       lab_a: { ipv4_address: "${SQL2_IP}" }
 
@@ -111,7 +108,6 @@ services:
       VM_CDROM: /media/${LAB_SQL_ISO}
       VM_SMBIOS_SERIAL: "LAB;SQL3;${SQL3_IP};${LAB_PREFIX};${LAB_NET_B_ROUTER};${DC1_IP}"
       LAB_TEST_APPEND: "lab.ip=${SQL3_IP}/${LAB_PREFIX} lab.gw=${LAB_NET_B_ROUTER}"
-    ports: ["${LAB_VNC_BIND:-127.0.0.1}:${SQL3_VNC_PORT:-5914}:5900"]
     networks:
       lab_b: { ipv4_address: "${SQL3_IP}" }
 
@@ -127,7 +123,6 @@ services:
       VM_CDROM: /media/${LAB_SQL_ISO}
       VM_SMBIOS_SERIAL: "LAB;SQL4;${SQL4_IP};${LAB_PREFIX};${LAB_NET_B_ROUTER};${DC1_IP}"
       LAB_TEST_APPEND: "lab.ip=${SQL4_IP}/${LAB_PREFIX} lab.gw=${LAB_NET_B_ROUTER}"
-    ports: ["${LAB_VNC_BIND:-127.0.0.1}:${SQL4_VNC_PORT:-5915}:5900"]
     networks:
       lab_b: { ipv4_address: "${SQL4_IP}" }
 

@@ -10,6 +10,7 @@ ARG DEBIAN_FRONTEND=noninteractive
 RUN apt-get update \
  && apt-get install -y --no-install-recommends \
       qemu-system-x86 qemu-utils ovmf iproute2 python3 procps ca-certificates \
+      novnc python3-websockify \
  && rm -rf /var/lib/apt/lists/*
 COPY launcher.sh router.sh qmp.py /opt/lab/
 RUN chmod +x /opt/lab/launcher.sh /opt/lab/router.sh /opt/lab/qmp.py \
