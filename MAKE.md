@@ -104,6 +104,7 @@ Read this file completely before you start. Do the procedures in sequence.
 5. Expect these log lines in this order: `stage 1/3`, `checkpoint 'sql-standalone' saved`, `stage 2/3`, `checkpoint 'cluster' saved`, `stage 3/3`, `HEALTHY`, `checkpoint 'golden' saved`, `provisioning finished`.
 6. If provisioning stops with an error, fix the cause (section 9). Then continue from the last checkpoint that was saved:
    `./lab provision sql-standalone` or `./lab provision cluster`.
+   If no checkpoint is saved yet (a failure in stage 1), run `./lab provision` again. The VM disks keep the work that is done, and the guest scripts skip the steps that are complete.
 
 > **NOTE:** Each restore recreates the VM containers. The noVNC tabs reconnect without help. If a tab shows "Disconnected" for more than 30 s, run `./lab vnc` again.
 
