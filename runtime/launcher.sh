@@ -152,6 +152,7 @@ build_cmd() {
 # ------------------------------------------------------------------- signals --
 QPID=
 # shellcheck disable=SC2317  # invoked via trap
+# shellcheck disable=SC2329  # invoked via trap
 on_term() {
   if [[ -n "$QPID" ]] && kill -0 "$QPID" 2>/dev/null; then
     if [[ "$MODE" == boot ]]; then

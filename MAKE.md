@@ -9,6 +9,7 @@ Read this file completely before you start. Do the procedures in sequence.
 3. Write each time in Pacific Time (PT). Use the format `2026-10-15 09:15 PT`.
 4. Do not delete `images/` or `media/`, or anything in them, unless a procedure tells you to.
 5. Do not push the repository. Do not contact other people.
+6. Keep the progress log `logs/progress.log` (see step 3.0). Before and after each step, milestone, and failure, add one line: `./lab log "TEXT"`. The lab commands also write their own milestone lines to this log.
 
 > **WARNING:** The lab uses plain-text, lab-only passwords. Keep `LAB_VNC_BIND=127.0.0.1`. Do not expose the lab ports to a network.
 
@@ -39,20 +40,21 @@ Read this file completely before you start. Do the procedures in sequence.
 
 ## 3. Prerequisites and checks
 
+0. Do this first. Run `./lab log "START prerequisites"`. This makes the empty file `logs/progress.log` and adds one timestamped line. Then run `./lab watch`. This opens a terminal window that follows the log (`tail -F`), so that the user can monitor progress. If there is no graphical session, the command prints the `tail -F` command. Give that command to the user.
 1. Make sure that the host is Linux on x86-64. Run `grep -Ec '(vmx|svm)' /proc/cpuinfo`. The result must be more than 0.
 2. Make sure that `/dev/kvm` exists. If it does not exist, enable virtualization in the firmware.
-3. Make sure that Docker Engine and Docker Compose v2 are installed. Run `docker info` and `docker compose version`. Both commands must succeed.
-4. Make sure that the user is in groups `docker` and `kvm`. Run `id -nG`. If a group is missing, tell the user to run `sudo usermod -aG docker,kvm "$USER"` and then log out and log in.
+3. Make sure that Docker Engine and Docker Compose (version 2 or later; any newer version is OK) are installed. Run `docker info` and `docker compose version`. Both commands must succeed.
+4. Make sure that the user can use Docker and `/dev/kvm`. Run `id -nG` and `ls -l /dev/kvm`. The user must be in group `docker`. Group `kvm` is necessary only if `/dev/kvm` is not readable and writable by all users (`./lab doctor` shows `/dev/kvm accessible` when it is OK). If a group is missing, tell the user to run `sudo usermod -aG docker,kvm "$USER"` and then log out and log in.
 5. Make sure that the host has 32 GB RAM or more. Make sure that it has 120 GB of free disk space or more.
    Make sure that `curl`, `sha256sum`, and an OpenSSH client are installed. `xdg-open` is optional.
    Make sure that `/dev/net/tun` exists. If it does not exist, run `sudo modprobe tun`.
 6. Run `./lab doctor`.
-7. Read every `warn` line in the output. Do the action that each line gives.
+7. Read every `warn` line in the output. Do the action that each line gives. Exceptions: `SQL ISO not found` is correct before section 4. Actions that need root (`sudo`) are optional; tell the user about them and continue.
 8. If `doctor` reports that the session is not in group `docker`, do one of these steps:
    - Tell the user to log out and log in again.
    - Send each lab command through `newgrp`. Example: `printf '%s\n' 'cd "$PWD" && ./lab doctor' | newgrp docker`.
 9. Run `./lab init`. This builds the runtime image, makes the SSH key, and makes the lab networks.
-10. Run `tests/validate.sh`. It must show `ALL STATIC CHECKS PASSED`.
+10. Run `tests/validate.sh`. It must show `ALL STATIC CHECKS PASSED`. You do not have to install the linters (shellcheck, yamllint, pwsh). If a linter is not installed, the script runs it from a container image (the first run downloads these images).
 11. If the user has root access, tell the user to run `sudo ./lab net` once after each host boot.
 
 > **CAUTION:** Do not use Docker from a snap package. Its confinement can block `/dev/kvm` and tap devices.
@@ -162,7 +164,7 @@ Do all these tests after provisioning. Record each result in the summary (sectio
 ## 10. Transcript and summary
 
 1. Make `TRANSCRIPT.md` before step 3.1.
-2. For each major step (sections 3, 4, 5, 6, 8), write one line when the step starts and one line when it ends:
+2. For each major step (sections 3, 4, 5, 6, 8), write one line when the step starts and one line when it ends. Write the same lines to the progress log with `./lab log`:
    `- 2026-10-15 09:20 PT START build-base` and
    `- 2026-10-15 10:02 PT END build-base (42 min, OK)`.
 3. Write each failure, its cause, and the fix below the step.

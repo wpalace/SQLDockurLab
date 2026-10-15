@@ -9,3 +9,4 @@ build/base/oem/lab/unattend-clone.final.xml
 tests/fakeguest/vmlinuz
 tests/fakeguest/initrd.img
 __pycache__/
+logs/

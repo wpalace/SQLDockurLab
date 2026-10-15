@@ -11,10 +11,14 @@ SQL_VMS=(SQL1 SQL2 SQL3 SQL4)
 
 _c_red=$'\e[31m'; _c_grn=$'\e[32m'; _c_yel=$'\e[33m'; _c_cyn=$'\e[36m'; _c_off=$'\e[0m'
 [[ -t 1 ]] || { _c_red=; _c_grn=; _c_yel=; _c_cyn=; _c_off=; }
-log()  { printf '%s[lab %s]%s %s\n' "$_c_cyn" "$(date +%H:%M:%S)" "$_c_off" "$*"; }
-ok()   { printf '%s  ok%s  %s\n' "$_c_grn" "$_c_off" "$*"; }
-warn() { printf '%s  warn%s %s\n' "$_c_yel" "$_c_off" "$*" >&2; }
-die()  { printf '%s  error%s %s\n' "$_c_red" "$_c_off" "$*" >&2; exit 1; }
+# Progress log: when logs/progress.log exists, every log/ok/warn/error line is also appended to it
+# with a timestamp, so the user can follow it with `./lab watch` (tail -F).
+PROGRESS_LOG=${LAB_PROGRESS_LOG:-$LAB_ROOT/logs/progress.log}
+plog() { [[ -f $PROGRESS_LOG ]] || return 0; printf '%s %s\n' "$(date '+%Y-%m-%d %H:%M:%S %Z')" "$*" >> "$PROGRESS_LOG" 2>/dev/null || true; }
+log()  { printf '%s[lab %s]%s %s\n' "$_c_cyn" "$(date +%H:%M:%S)" "$_c_off" "$*"; plog "$*"; }
+ok()   { printf '%s  ok%s  %s\n' "$_c_grn" "$_c_off" "$*"; plog "  ok   $*"; }
+warn() { printf '%s  warn%s %s\n' "$_c_yel" "$_c_off" "$*" >&2; plog "  WARN $*"; }
+die()  { printf '%s  error%s %s\n' "$_c_red" "$_c_off" "$*" >&2; plog "  ERROR $*"; exit 1; }
 now_ms() { date +%s%3N; }
 elapsed() { local t0=$1; local ms=$(( $(now_ms) - t0 )); printf '%d.%01ds' $((ms / 1000)) $(((ms % 1000) / 100)); }
 
