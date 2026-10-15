@@ -39,16 +39,28 @@ Read this file completely before you start. Do the procedures in sequence.
 
 ## 3. Prerequisites and checks
 
-1. Make sure that the host has `/dev/kvm`, Docker 28 or later, Docker Compose v2, `ssh`, `python3`, and `curl`.
-2. Make sure that the host has 32 GB RAM or more. Make sure that it has 120 GB of free disk space or more.
-3. Run `./lab doctor`.
-4. Read every `warn` line in the output.
-5. If `doctor` reports that the session is not in group `docker`, do one of these steps:
+> **NOTE:** The expected host is Ubuntu 22.04 or 24.04. The lab is not yet tested on Ubuntu hardware. Record each Ubuntu-specific problem in the transcript.
+
+1. On Ubuntu, install the packages:
+   ```bash
+   sudo apt update
+   sudo apt install docker.io docker-compose-v2 openssh-client curl coreutils iproute2 cpu-checker xdg-utils
+   ```
+   If Docker CE is installed, use package `docker-compose-plugin` instead of `docker-compose-v2`.
+2. Run `kvm-ok`. The output must be `KVM acceleration can be used`.
+3. Add the user to groups `docker` and `kvm`: `sudo usermod -aG docker,kvm "$USER"`. Then the user must log out and log in.
+4. Load the network modules: `sudo modprobe tun vhost_net`.
+5. Make sure that the host has 32 GB RAM or more. Make sure that it has 120 GB of free disk space or more.
+6. Run `./lab doctor`.
+7. Read every `warn` line in the output. Do the action that each line gives.
+8. If `doctor` reports that the session is not in group `docker`, do one of these steps:
    - Tell the user to log out and log in again.
    - Send each lab command through `newgrp`. Example: `printf '%s\n' 'cd "$PWD" && ./lab doctor' | newgrp docker`.
-6. Run `./lab init`. This builds the runtime image, makes the SSH key, and makes the lab networks.
-7. Run `tests/validate.sh`. It must show `ALL STATIC CHECKS PASSED`.
-8. If the user has root access, tell the user to run `sudo ./lab net` once after each host boot.
+9. Run `./lab init`. This builds the runtime image, makes the SSH key, and makes the lab networks.
+10. Run `tests/validate.sh`. It must show `ALL STATIC CHECKS PASSED`.
+11. If the user has root access, tell the user to run `sudo ./lab net` once after each host boot.
+
+> **CAUTION:** Do not use the Docker snap package. Its confinement can block `/dev/kvm` and tap devices.
 
 > **CAUTION:** Without `sudo ./lab net`, the bridge MAC addresses are not pinned, and the firewall rules are not added. Each `up` then shows a `could not pin MAC` warning. The lab still works. Right after a restore, SSH can time out for a few seconds; the lab scripts retry.
 
@@ -75,12 +87,11 @@ Read this file completely before you start. Do the procedures in sequence.
 1. Start the build in the background:
    `setsid nohup ./lab build-base > build-base.log 2>&1 < /dev/null &`
 2. Wait 60 s.
-3. Run `./lab vnc build`. This opens Chromium on Hyprland workspace 6 with the Windows install console (http://127.0.0.1:8006).
-4. Tell the user which workspace has the console.
+3. Run `./lab vnc build`. This opens the Windows install console (http://127.0.0.1:8006) in the default browser. If there is no graphical session, the command prints the URL.
+4. Give the URL to the user.
 5. Monitor `build-base.log` and `build/base/shared/` every 5-10 min.
 6. Expect these files in `build/base/shared/`, in this order: `phase1.started`, `phase1.done`, `phase2.started`, `sysprep.started`.
 7. The build is complete when `build-base.log` shows `base image ready`.
-8. Run `./lab vnc close`.
 
 > **CAUTION:** The dockur console shows the Windows setup screens and then a command prompt (sconfig). The lab scripts run hidden. To see their progress, read `build/base/shared/*.txt`.
 
@@ -91,7 +102,7 @@ Read this file completely before you start. Do the procedures in sequence.
 1. Start provisioning in the background:
    `setsid nohup ./lab provision > provision.log 2>&1 < /dev/null &`
 2. Wait until `provision.log` shows `waiting for all VMs`.
-3. Run `./lab vnc`. This opens one noVNC tab for each VM (DC1, SQL1-SQL4) on workspace 6.
+3. Run `./lab vnc`. This opens one noVNC tab for each VM (DC1, SQL1-SQL4) in the default browser. If there is no graphical session, give the printed URLs to the user.
 4. Monitor `provision.log` every 5 min.
 5. Expect these log lines in this order: `stage 1/3`, `checkpoint 'sql-standalone' saved`, `stage 2/3`, `checkpoint 'cluster' saved`, `stage 3/3`, `HEALTHY`, `checkpoint 'golden' saved`, `provisioning finished`.
 6. If provisioning stops with an error, fix the cause (section 9). Then continue from the last checkpoint that was saved:
@@ -140,8 +151,8 @@ Do all these tests after provisioning. Record each result in the summary (sectio
 
 | Symptom | Cause | Action |
 |---|---|---|
-| `permission denied` on the Docker socket | The session is not in group `docker` | Do step 3.5 |
-| `could not pin MAC` warning | No root access | Tell the user to run `sudo ./lab net` (step 3.8). You can continue. |
+| `permission denied` on the Docker socket | The session is not in group `docker` | Do step 3.8 |
+| `could not pin MAC` warning | No root access | Tell the user to run `sudo ./lab net` (step 3.11). You can continue. |
 | `ssh: connect ... timed out` just after a restore | ARP is slow on a busy guest | Run the command again. If the error stays for more than 2 min, run `./lab reset`. |
 | `build-base` shows no new marker for 30 min | A guest script stopped | Look at the console (`./lab vnc build`). Read `build/base/shared/*.txt`. Fix the script in `build/base/oem/lab/`. Then run `./lab build-base` again. |
 | `X.ps1 exited N` during `provision` | Guest script error | Read the error text above that line. Fix the script in `guest/`. Then continue from the last checkpoint (step 6.6). |
@@ -151,7 +162,7 @@ Do all these tests after provisioning. Record each result in the summary (sectio
 
 > **WARNING:** Do not run `docker system prune` or delete `images/base/`. A new base image takes 35-60 min.
 
-> **NOTE:** To capture a VM screen for diagnosis, look at its noVNC tab, or take a host screenshot (`grim`). For the dockur build VM, send `screendump` to `/run/shm/monitor.sock` in container `lab-base-build`.
+> **NOTE:** To see a VM screen for diagnosis, open its noVNC tab. For the dockur build VM, send `screendump` to `/run/shm/monitor.sock` in container `lab-base-build`.
 
 ## 10. Transcript and summary
 

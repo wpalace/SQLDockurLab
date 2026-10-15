@@ -13,6 +13,23 @@ host (Linux, KVM, Docker)
           router container routes between subnets (optional netem WAN delay)
 ```
 
+## Host prerequisites (Ubuntu 22.04 / 24.04)
+
+> Ubuntu is the expected host, but this lab has not yet been tested on Ubuntu hardware. It was
+> developed on Arch Linux (Docker 29, KVM) and on a Debian-based CI-style box (TCG).
+
+```bash
+sudo apt update
+sudo apt install docker.io docker-compose-v2 openssh-client curl coreutils iproute2 cpu-checker xdg-utils
+# or Docker CE from download.docker.com: docker-ce docker-ce-cli containerd.io docker-compose-plugin
+kvm-ok                                   # must say "KVM acceleration can be used"
+sudo usermod -aG docker,kvm "$USER"      # then log out and log in
+sudo modprobe tun vhost_net
+```
+
+Do not use the Docker snap package (confinement blocks `/dev/kvm`, tap devices and bind mounts).
+No QEMU is needed on the host; it runs inside the lab containers.
+
 ## Quickstart
 
 ```bash
@@ -26,8 +43,9 @@ cp ~/Downloads/SQLServer2025-x64-ENU-EntDev.iso media/
 ./lab down
 ```
 
-Watch the VMs: `./lab vnc` opens Chromium on Hyprland workspace 6 (`LAB_VNC_WORKSPACE`) with one
-noVNC tab per VM; `./lab vnc build` opens the dockur install console (:8006). QEMU serves each
+Watch the VMs: `./lab vnc` opens one noVNC tab per VM in the default browser (`xdg-open`), or
+prints the URLs when there is no graphical session; `./lab vnc build` opens the dockur install
+console (:8006). QEMU serves each
 console on `images/run/<vm>.vnc`; `./lab console` runs the websockify gateway on 127.0.0.1:6111-6115.
 
 Docker group: if `./lab doctor` says the session lacks group `docker`, log out and in, or run
@@ -174,6 +192,10 @@ guests** (the build sandbox cannot run KVM guests).
 - SQL 2025 setup flags (`/SQLMAXMEMORY`, PID `22222-...` for Enterprise Developer) come from the
   docs. Enable-Hadr uses `Enable-SqlAlwaysOn` (SQLPS); the registry fallback also grants the
   service SID cluster access and registers the AG resource type (else error 35222 / 41105).
+- Ubuntu (expected host, untested on hardware): iptables there is the nft shim, which `./lab net`
+  handles; ufw does not affect host→VM traffic (the host sits on the lab bridges) or cross-subnet
+  traffic (routed inside the router container). AppArmor's docker-default profile allows the
+  `/dev/kvm`/`/dev/net/tun` devices and `NET_ADMIN` that the containers use. Avoid snap Docker.
 - Docker ≥ 28 changed bridge filtering. Host→VM traffic doesn't depend on it, but verify
   cross-subnet with the e2e test. Rootful podman is untested.
 - Disk: base ~12 GB + 3 checkpoints × (5 disks of deltas + ~12-18 GB state) ≈ 70-100 GB.
