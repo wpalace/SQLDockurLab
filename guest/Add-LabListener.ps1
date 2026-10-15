@@ -15,7 +15,20 @@ Import-Module FailoverClusters
 $res = Get-ClusterResource | Where-Object { $_.ResourceType.Name -eq 'Network Name' -and $_.OwnerGroup.Name -eq $ag } | Select-Object -First 1
 if ($res) {
     # RegisterAllProvidersIP=1 (both IPs in DNS, clients use MultiSubnetFailover=True); short TTL.
-    $res | Set-ClusterParameter -Multiple @{ RegisterAllProvidersIP = 1; HostRecordTTL = 60 } -ErrorAction SilentlyContinue
+    $want = @{ RegisterAllProvidersIP = 1; HostRecordTTL = 60 }
+    $cur = @{}; $res | Get-ClusterParameter -Name @($want.Keys) | ForEach-Object { $cur[$_.Name] = $_.Value }
+    $changed = @($want.Keys | Where-Object { "$($cur[$_])" -ne "$($want[$_])" })
+    if ($changed) {
+        $res | Set-ClusterParameter -Multiple $want -WarningAction SilentlyContinue
+        # Network Name parameters apply only after an offline/online cycle. Stopping the name
+        # also stops the listener resource that depends on it; starting the group restores all.
+        Write-Step "Cycling $($res.Name) to apply $($changed -join ', ')"
+        Stop-ClusterResource -InputObject $res -Wait 60 | Out-Null
+        Start-ClusterGroup -Name $ag -Wait 120 | Out-Null
+        Wait-Until -What "listener resources online" -TimeoutSeconds 120 -IntervalSeconds 2 -Condition {
+            -not (Get-ClusterResource | Where-Object { $_.OwnerGroup.Name -eq $ag -and $_.State -ne 'Online' })
+        }
+    }
 }
 Write-Ok "Listener $($c.listenerName) configured"
 exit 0
