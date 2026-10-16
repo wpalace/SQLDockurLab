@@ -3,9 +3,10 @@ BeforeAll {
     $script:Repo = (Resolve-Path (Join-Path $PSScriptRoot '..')).Path
     # Never touch the real terraform files: every test uses a registry file in TestDrive.
     $env:LAB_GCP_SPAWNED_JSON = Join-Path $TestDrive 'spawned.auto.tfvars.json'
+    $env:PROGRESS_LOG = Join-Path $TestDrive 'progress.log'   # never write test lines to the real logs/progress.log
     . (Join-Path $script:Repo 'deploy/gcp/lab-gcp.ps1')
 }
-AfterAll { Remove-Item Env:LAB_GCP_SPAWNED_JSON -ErrorAction SilentlyContinue }
+AfterAll { Remove-Item Env:LAB_GCP_SPAWNED_JSON, Env:PROGRESS_LOG -ErrorAction SilentlyContinue }
 
 Describe 'VM names' {
     BeforeEach {
