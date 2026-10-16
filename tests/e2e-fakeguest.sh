@@ -9,7 +9,19 @@ set -Eeuo pipefail
 exec 2>&1
 ROOT=$(cd "$(dirname "$0")/.." && pwd)
 WORK=${WORK:-/tmp/sql-ag-lab-e2e}
-rm -rf "$WORK"; mkdir -p "$WORK/images/base" "$WORK/images/test" "$WORK/media"
+# Earlier runs leave root-owned files (QEMU writes as root in the containers): clean them with
+# sudo -n, or with a throwaway container when sudo needs a password. Clean again at exit,
+# so the next run (and a disk snapshot taken later) has no leftovers.
+clean_work() {
+  [[ -e $WORK ]] || return 0
+  rm -rf "$WORK" 2>/dev/null || sudo -n rm -rf "$WORK" 2>/dev/null \
+    || docker run --rm -v "$(dirname "$WORK"):/w" --entrypoint rm sql-ag-lab/vm:latest -rf "/w/$(basename "$WORK")" 2>/dev/null || true
+  [[ ! -e $WORK ]] || { echo "FAIL cannot remove $WORK (root-owned files): sudo rm -rf $WORK"; exit 1; }
+}
+clean_work; trap '"$ROOT/lab" down >/dev/null 2>&1 || true; clean_work' EXIT
+# A first restore on a cloud VM can need more than 10 s to answer on TCP: allow 20 s.
+LIMIT=${E2E_UPTIME_LIMIT_S:-20}
+mkdir -p "$WORK/images/base" "$WORK/images/test" "$WORK/media"
 if [[ ! -f "$ROOT/tests/fakeguest/vmlinuz" || ! -f "$ROOT/tests/fakeguest/initrd.img" ]]; then
   echo "--- building fake guest kernel/initrd"
   "$ROOT/tests/fakeguest/build.sh" || { echo "FAIL could not build tests/fakeguest (see output above)"; exit 1; }
@@ -58,7 +70,7 @@ t0=$(date +%s%3N)
 t1=$(date +%s%3N)
 after=$(uptime_of 10.50.0.11)
 echo "    restore wall time: $((t1 - t0)) ms; SQL1 uptime after restore: $after s"
-awk -v a="$after" -v b="$before" 'BEGIN { exit !(a >= b && a < b + 10) }' \
+awk -v l="$LIMIT" -v a="$after" -v b="$before" 'BEGIN { exit !(a >= b && a < b + l) }' \
   && pass "RAM state restored (uptime continued from $before -> $after, no reboot)" || fail "uptime $after vs $before"
 dcu=$(uptime_dc 10.50.0.10); [[ -n "$dcu" ]] && pass "DC1 restored (uptime $dcu)" || fail "DC1"
 
@@ -67,18 +79,18 @@ for n in 1 2 3; do
   t0=$(date +%s%3N); "$LAB" reset golden >/dev/null; t1=$(date +%s%3N)
   u=$(uptime_of 10.50.0.11)
   echo "    reset #$n: $((t1 - t0)) ms (uptime $u)"
-  awk -v a="$u" -v b="$before" 'BEGIN { exit !(a >= b && a < b + 10) }' || fail "reset #$n uptime $u"
+  awk -v l="$LIMIT" -v a="$u" -v b="$before" 'BEGIN { exit !(a >= b && a < b + l) }' || fail "reset #$n uptime $u"
 done
 pass "repeated fast resets return to the identical state"
 t0=$(date +%s%3N); LAB_FAST_RESET=0 "$LAB" reset golden >/dev/null; t1=$(date +%s%3N)
 u=$(uptime_of 10.50.0.11); echo "    full reset (recreate containers): $((t1 - t0)) ms (uptime $u)"
-awk -v a="$u" -v b="$before" 'BEGIN { exit !(a >= b && a < b + 10) }' && pass "full reset" || fail "full reset uptime $u"
+awk -v l="$LIMIT" -v a="$u" -v b="$before" 'BEGIN { exit !(a >= b && a < b + l) }' && pass "full reset" || fail "full reset uptime $u"
 
 echo "--- chained checkpoint"
 sleep 3; "$LAB" save second
 "$LAB" up second >/dev/null
 u2=$(uptime_of 10.50.0.11)
-awk -v a="$u2" -v b="$before" 'BEGIN { exit !(a > b + 2) }' && pass "chained checkpoint 'second' (uptime $u2)" || fail "second $u2"
+awk -v l="$LIMIT" -v a="$u2" -v b="$before" 'BEGIN { exit !(a > b + 2) }' && pass "chained checkpoint 'second' (uptime $u2)" || fail "second $u2"
 "$LAB" delete golden 2>/dev/null && fail "deleted a parent checkpoint" || pass "refused to delete parent checkpoint"
 "$LAB" down
 "$LAB" up golden >/dev/null && pass "parent still restorable after child created"

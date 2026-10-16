@@ -32,7 +32,8 @@ Usage: ./lab gcp <command> [args]          (VM = key like bill-1, or the full VM
 Infrastructure (Terraform; ROOT = shared | vms, default vms):
   init [ROOT]            terraform init (uses backend.tf when present)
   plan [ROOT]            terraform plan
-  apply [ROOT]           terraform apply  (shared: once per project; vms: your VMs)
+  apply [ROOT] [--yes]   terraform apply  (shared: once per project; vms: your VMs);
+                         asks "Enter a value:" (type yes); --yes / -auto-approve skips it (agents)
   destroy [ROOT]         terraform destroy of a whole root (asks for confirmation)
   create VM | delete VM  apply/destroy one entry of vms in terraform.tfvars
   tf-check               terraform fmt -check + validate for both roots (no credentials)
@@ -107,7 +108,7 @@ cmd_tf() { # ACTION ROOT
   case $action in
     init) tf -chdir="$dir" init -upgrade ;;
     plan) tf_need_vars "$dir"; tf -chdir="$dir" plan ;;
-    apply) tf_need_vars "$dir"; tf -chdir="$dir" apply ;;
+    apply) tf_need_vars "$dir"; tf -chdir="$dir" apply "${@:3}" ;;  # agents: add -auto-approve
     destroy) tf_need_vars "$dir"; tf -chdir="$dir" destroy ;;
   esac
 }
@@ -178,7 +179,7 @@ cmd_push() {
 }
 cmd_deploy() {
   ctx; local n; n=$(vm_name "$1"); shift
-  rcmd "$n" "cd $REMOTE_DIR && setsid -f nohup deploy/gcp/remote-deploy.sh $* > logs-gcp-deploy.log 2>&1 < /dev/null; sleep 2; tail -3 $REMOTE_DIR/logs-gcp-deploy.log"
+  rcmd "$n" "cd $REMOTE_DIR && setsid -f nohup deploy/gcp/remote-deploy.sh $* > logs-gcp-deploy.log 2>&1 < /dev/null; sleep 2; tail -3 logs-gcp-deploy.log" || warn "could not read the deploy log yet (the deploy runs on the VM)"
   ok "deploy started on $n. Follow it: ./lab gcp watch $1   Consoles: ./lab gcp tunnel $1"
   watch_gcp "$1"
 }
@@ -272,7 +273,7 @@ cmd_golden() {  # final build step: only after a test pass; stops the VM, snapsh
   local fp commit; fp=$(sed -n 's/^FINGERPRINT=//p' <<<"$info"); commit=$(tail -1 <<<"$info")
   log "stopping the lab and $n for a consistent disk"
   rcmd "$n" "cd $REMOTE_DIR && ./lab down" >/dev/null || true
-  gc compute instances stop "$n" --project "$PROJECT" --zone "$ZONE" --quiet
+  gc compute instances stop "$n" --project "$PROJECT" --zone "$ZONE" --quiet  # the VM is TERMINATED after this: no separate stop step
   local t0=$SECONDS
   gc compute snapshots create "$snap" --project "$PROJECT" --source-disk "$n" --source-disk-zone "$ZONE" \
     --storage-location "${ZONE%-*}" --description "sql-ag-lab golden from $n, commit $commit, checkpoint fingerprint $fp" \
@@ -359,7 +360,8 @@ main() {
   case $c in
     help|-h|--help) usage ;;
     destroy) case ${1:-vms} in shared|vms) cmd_tf destroy "$@" ;; *) ctx; cmd_destroy_vm "$@" ;; esac ;;
-    init|plan|apply) cmd_tf "$c" "$@" ;;
+    init|plan) cmd_tf "$c" "$@" ;;
+    apply) local r=vms a=(); for x in "$@"; do case $x in shared|vms) r=$x ;; -y|--yes|-auto-approve) a+=(-auto-approve) ;; *) a+=("$x") ;; esac; done; cmd_tf apply "$r" "${a[@]}" ;;
     test) cmd_test "${1:?VM required}" ;;
     golden) cmd_golden "${1:?VM required}" "${@:2}" ;;
     finish) cmd_finish "${1:?VM required}" "${@:2}" ;;

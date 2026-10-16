@@ -226,6 +226,13 @@ The lab runs on any Linux host with KVM and Docker. `MAKE.md` section 1a selects
   delete VMs -> `./lab gcp spawn NAME` clones from the snapshot when needed (pd-balanced; the build VM uses pd-ssd), `./lab gcp destroy NAME`.
   Command: `./lab gcp help`. Procedure: `MAKE.md` section G.
 
+## Connect with VS Code
+
+Use the `ms-mssql.mssql` extension with SQL authentication (`sa`, password `LAB_PASSWORD` in `lab.env`,
+trust server certificate). Local lab: listener `10.50.0.60` (MultiSubnetFailover), SQL1-SQL4
+`10.50.0.11`, `10.50.0.12`, `10.51.0.13`, `10.51.0.14`. GCP: `./lab gcp tunnel VM --sql`, then
+`127.0.0.1,14330` (listener) and `127.0.0.1,14331`-`14334`. Details: MAKE.md section 7a.
+
 ## Live watch terminal
 
 Long steps (`./lab build-base`, `./lab provision`, `./lab gcp deploy`, `./lab gcp publish`) open one
