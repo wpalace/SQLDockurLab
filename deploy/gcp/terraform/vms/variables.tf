@@ -119,3 +119,23 @@ variable "timezone" {
   type        = string
   default     = "UTC"
 }
+
+variable "spawned" {
+  description = "Clones made by ./lab gcp spawn (written to spawned.auto.tfvars.json; do not edit by hand). Key = exact GCE name."
+  type = map(object({
+    owner            = string
+    source_snapshot  = string
+    machine_type     = optional(string)
+    min_cpu_platform = optional(string)
+    disk_type        = optional(string)
+    disk_size_gb     = optional(number)
+    cpu_model        = optional(string)
+    spot             = optional(bool)
+    publisher        = optional(bool, false)
+  }))
+  default = {}
+  validation {
+    condition     = alltrue([for k, v in var.spawned : can(regex("^[a-z]([-a-z0-9]{0,61}[a-z0-9])?$", k))])
+    error_message = "Spawned VM names must be valid GCE names (lowercase letters, digits, hyphens)."
+  }
+}

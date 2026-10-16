@@ -31,7 +31,7 @@ Read this file completely before you start. Do the procedures in sequence.
 | Target | Host | Procedure |
 |---|---|---|
 | Local | This Linux computer | Sections 3 to 10 |
-| GCP | One Google Compute Engine VM | Section G, then sections 3 to 10 on that VM |
+| GCP | One Google Compute Engine VM | Section G: build, test, golden snapshot, stop. Then spawn clones as necessary (G10) |
 
 > **NOTE:** More targets can be added to this table. Each target makes a Linux host with KVM and Docker. Then the same lab procedure (sections 3 to 10) runs on that host.
 
@@ -148,6 +148,8 @@ Read this file completely before you start. Do the procedures in sequence.
 ## 8. Test cases
 
 Do all these tests after provisioning. Record each result in the summary (section 10).
+
+> **NOTE:** `tests/run-tcs.sh` does TC1 to TC7 automatically. It shows `PASS` or `FAIL` and the duration for each test, and ends with `ALL TESTS PASSED` or `TESTS FAILED`. For TC7, it examines the URLs with `curl`; ask the user to confirm the screens.
 
 1. **TC1 Static checks.** Run `tests/validate.sh`. Expected: `ALL STATIC CHECKS PASSED`.
 2. **TC2 Engine test.** Run `tests/e2e-fakeguest.sh`. Expected: `all e2e checks passed`. Run it only when no lab is running, because it uses the same container names.
@@ -275,13 +277,51 @@ Do all these tests after provisioning. Record each result in the summary (sectio
 
 ### G8. Tests
 
-1. Run `./lab gcp ssh VM`. Then do sections 8 and 10 on the lab host, in `~/sql-ag-lab`.
+1. Run `./lab gcp test VM`. This runs the test cases TC1 to TC7 (section 8) on the lab host with `tests/run-tcs.sh`. The live watch terminal opens.
+2. The output must end with `all tests passed on VM`. The output shows one `RESULT` line with `PASS` or `FAIL` and the duration for each test.
+3. Record the results in `TRANSCRIPT.md` (section 10).
+4. If a test fails, go to section 9. Do not do G9.
 
-### G9. Stop the lab host
+### G9. Golden snapshot (final build step)
+
+1. Do this step only after all tests pass (G8). Get approval from the user, because the step stops the lab host.
+2. Run `./lab gcp golden VM`. The command:
+   - Makes sure that `logs/tests.passed` on the lab host is newer than the golden checkpoint. If not, it stops and makes no snapshot.
+   - Stops the lab and the lab host, so that the disk is consistent.
+   - Makes the snapshot `sqlag-golden-YYYYMMDD-HHMM` with the labels `kind=golden`, `source`, `fp` (checkpoint fingerprint), and `commit`.
+   - Records the snapshot as the latest golden snapshot in `deploy/gcp/state/golden-snapshot` (not committed).
+   - Adds a line to `logs/progress.log` and to `TRANSCRIPT.md`.
+3. Run `./lab gcp list`. The lab host must show `TERMINATED`.
+4. Run `./lab gcp snapshots`. The new snapshot must show as latest.
+
+> **NOTE:** `./lab gcp finish VM` does G8 and G9 in one command. It makes no snapshot if a test fails.
+
+> **NOTE:** A snapshot costs about $0.05 for each GB-month of stored data (estimate). A lab host with checkpoints stores about 50 GB, so about $2.50 for each month. A stopped 300 GB `pd-ssd` disk costs about $51 for each month. Thus, to keep a lab for later use, keep the snapshot and delete the VM.
+
+### G10. Delete VMs and spawn clones from the golden snapshot
+
+1. To make a new lab host from the latest golden snapshot, run `./lab gcp spawn NAME`. Get approval from the user first (it makes a VM that costs money). The command:
+   - Adds `NAME` to `deploy/gcp/terraform/vms/spawned.auto.tfvars.json` (not committed) and applies only that VM with Terraform.
+   - Uses the same machine type, minimum CPU platform, network, and service account as the defaults in `terraform.tfvars`.
+   - Waits for SSH and the startup script, does `./lab gcp check NAME`, and copies the repository.
+   - Restores golden with `LAB_UP_TIMEOUT=1800`, and does a deep health check.
+2. Options: `--disk-type pd-ssd|pd-balanced|pd-standard`, `--snapshot SNAPSHOT`, `--machine-type TYPE`, `--no-up` (no restore).
+3. To delete a spawned VM and its disk, run `./lab gcp destroy NAME`. Type the name to confirm, or use `--yes`. The snapshots stay.
+4. To use a different snapshot as latest, run `./lab gcp use-snapshot SNAPSHOT`.
+
+> **CAUTION:** `./lab gcp destroy NAME` deletes only VMs made by `spawn`. It refuses the VMs in `terraform.tfvars` (for example `bill-1`). To delete one of those, use `./lab gcp delete KEY` after approval from the user.
+
+> **NOTE:** The first restore on a spawned VM is slow. The disk loads each block from the snapshot when it is read for the first time. On `pd-standard`, the first restore took more than 180 s; after that, resets took 2.2-2.7 s. If you need fast first restores, use `pd-ssd` and make sure that the quota `SSD_TOTAL_GB` is sufficient.
+
+> **CAUTION:** A golden snapshot restores correctly only on a VM with the same CPU model and runtime image as the source VM. Keep the machine type and the minimum CPU platform the same as the source (the defaults). The snapshot label `fp` shows the checkpoint fingerprint. `./lab up` shows a warning when the fingerprint is different.
+
+> **NOTE:** The shared bucket (G6) is a fallback. If no golden snapshot is available, or a snapshot does not agree with the CPU of the new VM, make a VM with `./lab gcp create KEY`. Then run `./lab gcp deploy KEY --checkpoints`. The deploy downloads the ISO, the base image, and (if the fingerprint agrees) the checkpoints from the bucket, and builds what is missing.
+
+### G11. Stop the lab host
 
 1. Run `./lab gcp stop VM` when you finish. Compute charges stop. Disk charges continue.
 2. Run `./lab gcp cost` to show the estimate to the user.
-3. To delete a VM, run `./lab gcp delete KEY`. Get approval from the user first.
+3. To delete a VM from `terraform.tfvars`, run `./lab gcp delete KEY`. Get approval from the user first.
 
 | Task (GCP) | Command |
 |---|---|
@@ -290,4 +330,7 @@ Do all these tests after provisioning. Record each result in the summary (sectio
 | Shell on the lab host | `./lab gcp ssh VM` |
 | Consoles and SQL | `./lab gcp tunnel VM [--sql]` |
 | Add one VM from tfvars | `./lab gcp create KEY` |
-
+| Tests, then golden snapshot | `./lab gcp finish VM` |
+| Clone from the golden snapshot | `./lab gcp spawn NAME [--disk-type T]` |
+| Delete a clone | `./lab gcp destroy NAME` |
+| List snapshots | `./lab gcp snapshots` |
