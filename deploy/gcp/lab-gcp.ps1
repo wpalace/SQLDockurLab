@@ -1,3 +1,4 @@
+#!/usr/bin/env pwsh
 #Requires -Version 7.2
 <#
 .SYNOPSIS
@@ -40,7 +41,8 @@ Infrastructure (Terraform; ROOT = shared | vms, default vms):
   plan [ROOT]            terraform plan
   apply [ROOT] [--yes]   terraform apply (asks "Enter a value:"; --yes / -auto-approve skips it)
   destroy [ROOT]         terraform destroy of a whole root (asks for confirmation)
-  create VM | delete VM  apply/destroy one entry of vms in terraform.tfvars
+  create KEY | delete KEY [--yes]
+                         apply/destroy one entry of vms in terraform.tfvars
   tf-check               terraform fmt -check + validate for both roots (no credentials)
   tools                  check the operator tools (pwsh, gcloud, terraform, git, terminal)
 
@@ -169,8 +171,10 @@ function Invoke-TfCheck {
     if ($rc) { Die 'terraform checks failed' }
 }
 function Update-TfOutputs { & terraform "-chdir=$TfVms" apply -refresh-only -auto-approve -input=false | Out-Null; if ($LASTEXITCODE) { Warn 'could not refresh terraform outputs' } }
-function Invoke-Create([string]$k) { if (-not $k) { Die 'usage: create KEY' }; Assert-TfVars $TfVms; Tf "-chdir=$TfVms" apply "-target=google_compute_instance.lab[`"$k`"]"; Update-TfOutputs }
-function Invoke-Delete([string]$k) { if (-not $k) { Die 'usage: delete KEY' }; Assert-TfVars $TfVms; Tf "-chdir=$TfVms" destroy "-target=google_compute_instance.lab[`"$k`"]"; Update-TfOutputs }
+# --yes (agents, after approval from the user) adds -auto-approve.
+function Get-YesFlag([string[]]$f) { if (@($f | Where-Object { $_ -in '-y', '--yes', '-auto-approve' })) { , @('-auto-approve') } else { , @() } }
+function Invoke-Create([string]$k, [string[]]$Flags) { if (-not $k) { Die 'usage: create KEY [--yes]' }; Assert-TfVars $TfVms; Tf "-chdir=$TfVms" apply @(Get-YesFlag $Flags) "-target=google_compute_instance.lab[`"$k`"]"; Update-TfOutputs }
+function Invoke-Delete([string]$k, [string[]]$Flags) { if (-not $k) { Die 'usage: delete KEY [--yes]' }; Assert-TfVars $TfVms; Tf "-chdir=$TfVms" destroy @(Get-YesFlag $Flags) "-target=google_compute_instance.lab[`"$k`"]"; Update-TfOutputs }
 
 function Test-Tools {  # operator prerequisites (MAKE.md G1)
     $fails = 0
@@ -480,8 +484,8 @@ function Invoke-LabGcp([string[]]$Argv) {
         'use-snapshot' { Set-UseSnapshot $(if ($a.Count) { $a[0] } else { '' }) }
         'tf-check' { Invoke-TfCheck }
         'tools' { Test-Tools }
-        'create' { Invoke-Create $(if ($a.Count) { $a[0] } else { '' }) }
-        'delete' { Invoke-Delete $(if ($a.Count) { $a[0] } else { '' }) }
+        'create' { Invoke-Create $(if ($a.Count) { $a[0] } else { '' }) (Rest1) }
+        'delete' { Invoke-Delete $(if ($a.Count) { $a[0] } else { '' }) (Rest1) }
         'list' { Invoke-List }
         { $_ -in 'start', 'stop' } { Set-Ctx; Invoke-Gcloud compute instances $c (Get-VmName (Arg1)) --project $script:Project --zone $script:Zone; if ($LASTEXITCODE) { Die "$c failed" } }
         'ssh' { Set-Ctx; $n = Get-VmName (Arg1); if ($a.Count -gt 1) { Invoke-Rcmd $n ((Rest1) -join ' ') } else { Invoke-Gssh $n @() } }
