@@ -53,7 +53,9 @@ Read this file completely before you start. Do the procedures in sequence.
 
 ## 3. Prerequisites and checks
 
-0. Do this first. Run `./lab log "START prerequisites"`. This makes the empty file `logs/progress.log` and adds one timestamped line. Then run `./lab watch`. This opens a terminal window that follows the log (`tail -F`), so that the user can monitor progress. If there is no graphical session, the command prints the `tail -F` command. Give that command to the user.
+0. Do this first. Run `./lab log "START prerequisites"`. This makes the empty file `logs/progress.log` and adds one timestamped line. Make `TRANSCRIPT.md` (section 10). Then run `./lab watch`. This opens a live watch terminal that follows `logs/progress.log` and `TRANSCRIPT.md` (`tail -F`), so that the user can monitor progress without asking. Make sure that the terminal is open before you continue.
+
+> **NOTE:** The live watch terminal also opens by itself when `./lab build-base` or `./lab provision` starts. If a watch terminal is open already, no second terminal opens (the file `logs/.watch-local.pid` records it). To prevent the automatic terminal, set `LAB_WATCH=0`. To select the terminal program, set `LAB_TERMINAL` (for example `LAB_TERMINAL=xterm`). If there is no graphical session, the command shows `bash logs/.watch-local.sh`. Give that command to the user.
 1. Make sure that the host is Linux on x86-64. Run `grep -Ec '(vmx|svm)' /proc/cpuinfo`. The result must be more than 0.
 2. Make sure that `/dev/kvm` exists. If it does not exist, enable virtualization in the firmware.
 3. Make sure that Docker Engine and Docker Compose (version 2 or later; any newer version is OK) are installed. Run `docker info` and `docker compose version`. Both commands must succeed.
@@ -260,7 +262,7 @@ Do all these tests after provisioning. Record each result in the summary (sectio
 1. Open a second terminal on the workstation. Run `./lab gcp tunnel VM`. Keep it open.
 2. Run `./lab gcp deploy VM` (add `--checkpoints` to use published checkpoints).
 3. Give the console URLs that the tunnel prints to the user: `http://127.0.0.1:8006` (base build), `http://127.0.0.1:6111` to `6115` (DC1, SQL1-SQL4). If a local lab uses these ports on the workstation, the tunnel adds 10000 (`18006`, `16111` to `16115`). Use the URLs that the tunnel prints.
-4. Run `./lab gcp watch VM`. The deploy is complete when the log shows `DEPLOY COMPLETE`.
+4. Make sure that the live watch terminal is open on the workstation. `./lab gcp deploy` and `./lab gcp publish` open it by themselves. It follows the progress log and the deploy log on the lab host (through IAP SSH, with automatic reconnect) and the local `TRANSCRIPT.md`. If it is not open, run `./lab gcp watch-term VM`. The deploy is complete when the log shows `DEPLOY COMPLETE`.
 5. For SQL access from the workstation, run `./lab gcp tunnel VM --sql`. Connect to `127.0.0.1,14330` (listener) or `127.0.0.1,14331` to `14334` (SQL1-SQL4).
 
 > **NOTE:** The networks 10.50.0.0/24 and 10.51.0.0/24 exist only on the lab host. Use the port forwards, or `--socks PORT` for a SOCKS proxy.

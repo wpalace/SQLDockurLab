@@ -223,3 +223,12 @@ The lab runs on any Linux host with KVM and Docker. `MAKE.md` section 1a selects
   (`deploy/gcp/terraform/{shared,vms}`), reached through IAP (no public IP), spot by default.
   A shared bucket holds the ISO, base image, and optionally the runtime image and checkpoints.
   Command: `./lab gcp help`. Procedure: `MAKE.md` section G.
+
+## Live watch terminal
+
+Long steps (`./lab build-base`, `./lab provision`, `./lab gcp deploy`, `./lab gcp publish`) open one
+terminal window by themselves that follows the build in real time: `logs/progress.log` and
+`TRANSCRIPT.md` (for GCP: the lab host's logs over IAP SSH plus the local `TRANSCRIPT.md`).
+Only one window per target opens (pid file in `logs/`). Open it yourself with `./lab watch` or
+`./lab gcp watch-term VM`. Opt out with `LAB_WATCH=0`; select the program with `LAB_TERMINAL`.
+Without a graphical session, the command to run is printed.

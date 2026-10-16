@@ -8,6 +8,8 @@ LAB_ROOT=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
 export PATH="$PATH:/usr/sbin:/sbin"
 # shellcheck source=lib/common.sh
 source "$LAB_ROOT/lib/common.sh"
+# shellcheck source=lib/watch.sh
+source "$LAB_ROOT/lib/watch.sh"
 # shellcheck source=lib/provision.sh
 source "$LAB_ROOT/lib/provision.sh"
 
@@ -41,7 +43,8 @@ Utilities:
   vnc [build|urls]       open noVNC consoles in the default browser (build = dockur :8006)
   info                   connection details (IPs, listener, credentials)
   log [MESSAGE]          create logs/progress.log; append a timestamped line
-  watch                  open a terminal window that follows logs/progress.log
+  watch                  open a terminal that follows logs/progress.log + TRANSCRIPT.md
+                         (opens by itself on build-base/provision; LAB_WATCH=0 to opt out)
   net                    (re)create lab networks / pin bridge MACs (idempotent)
 
 Deployment targets:
@@ -165,6 +168,7 @@ cmd_init() {
 cmd_build_base() {
   local t0=$SECONDS bdir="$LAB_ROOT/build/base" gen="$LAB_ROOT/build/base/oem/lab/generated"
   [[ -f "$LAB_IMAGES_DIR/base/disk.qcow2" && "${1:-}" != --force ]] && { ok "base image exists (use --force to rebuild)"; return 0; }
+  cmd_log; watch_local
   ensure_key
   mkdir -p "$gen" "$LAB_IMAGES_DIR/base-build" "$LAB_IMAGES_DIR/base" "$bdir/shared"
   rm -f "$bdir"/shared/*.started "$bdir"/shared/*.done
@@ -435,23 +439,8 @@ cmd_log() { # ./lab log MESSAGE : create logs/progress.log if needed and append 
   return 0
 }
 
-cmd_watch() { # open a terminal window that follows the progress log
-  cmd_log
-  local cmd="tail -n 200 -F '$PROGRESS_LOG'" t
-  if [[ -n ${DISPLAY:-}${WAYLAND_DISPLAY:-} ]]; then
-    for t in "${TERMINAL:-}" xdg-terminal-exec x-terminal-emulator gnome-terminal konsole xfce4-terminal ghostty kitty alacritty xterm; do
-      [[ -n $t ]] && type -P "${t%% *}" >/dev/null || continue
-      case ${t##*/} in
-        gnome-terminal) setsid "$t" --title="lab progress" -- bash -c "$cmd" >/dev/null 2>&1 & ;;
-        xdg-terminal-exec) setsid "$t" bash -c "$cmd" >/dev/null 2>&1 & ;;
-        kitty) setsid "$t" bash -c "$cmd" >/dev/null 2>&1 & ;;
-        konsole|xfce4-terminal) setsid "$t" -e "bash -c \"$cmd\"" >/dev/null 2>&1 & ;;
-        *) setsid "$t" -e bash -c "$cmd" >/dev/null 2>&1 & ;;
-      esac
-      ok "opened $t following $PROGRESS_LOG"; return 0
-    done
-  fi
-  warn "no graphical terminal found. Run in a terminal: $cmd"
+cmd_watch() { # open a terminal window that follows the progress log and TRANSCRIPT.md
+  cmd_log; watch_local force
 }
 
 cmd_build() { cmd_init; cmd_build_base "$@"; cmd_provision; }
