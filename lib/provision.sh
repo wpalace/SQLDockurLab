@@ -58,6 +58,7 @@ prov_checkpoint() { # <name> <settle-fn>
 cmd_provision() {
   local t0=$SECONDS from=${1:-}
   [[ -f "$LAB_IMAGES_DIR/base/disk.qcow2" ]] || die "no base image; run ./lab build-base first"
+  cmd_log; watch_local   # live terminal (lib/watch.sh); LAB_WATCH=0 to opt out
   write_guest_config
   ensure_net
   if [[ -z "$from" ]]; then

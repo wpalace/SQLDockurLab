@@ -14,6 +14,7 @@ mkdir -p logs; touch logs/progress.log   # enables ./lab watch
 if [[ -n ${LAB_GCP_CPU_MODEL:-} ]]; then
   printf '# written by deploy/gcp/remote-deploy.sh from instance metadata\nLAB_CPU_MODEL=%s\n' "$LAB_GCP_CPU_MODEL" > lab.local.env
 fi
+export LAB_WATCH=0   # no GUI on the VM: the watch terminal runs on the workstation (./lab gcp)
 step "fetch artifacts"; deploy/gcp/artifacts.sh fetch "$@"
 step "init";            ./lab init
 step "console gateway"; ./lab console >/dev/null || true   # noVNC on 6111-6115 for ./lab gcp tunnel

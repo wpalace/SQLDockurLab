@@ -16,6 +16,13 @@ _t() { [[ -t 1 ]] && printf '%s' "$1"; }
 log()  { printf '%s[gcp %s]%s %s\n' "$(_t $'\e[36m')" "$(date +%H:%M:%S)" "$(_t $'\e[0m')" "$*"; }
 ok()   { printf '%s  ok%s  %s\n' "$(_t $'\e[32m')" "$(_t $'\e[0m')" "$*"; }
 warn() { printf '%s  warn%s %s\n' "$(_t $'\e[33m')" "$(_t $'\e[0m')" "$*" >&2; }
+# shellcheck source=lib/watch.sh
+source "$LAB_ROOT/lib/watch.sh"
+# Live terminal on this machine: the VM progress + deploy log over IAP SSH, and the local TRANSCRIPT.md.
+watch_gcp() {
+  watch_open "gcp-$1" "tail -n 40 -F TRANSCRIPT.md &
+while :; do ./lab gcp watch '$1'; echo '[watch] connection to the VM lost; retrying in 15 s (Ctrl-C to stop)'; sleep 15; done" "${2:-}"
+}
 die()  { printf '%s  error%s %s\n' "$(_t $'\e[31m')" "$(_t $'\e[0m')" "$*" >&2; exit 1; }
 
 usage() {
@@ -39,7 +46,9 @@ VM lifecycle (gcloud):
   push VM                copy this repository (committed HEAD) to ~/sql-ag-lab on the VM
   deploy VM [--checkpoints]
                          run the lab build on the VM in the background (resumable)
-  watch VM               follow the deploy log on the VM
+  watch VM               follow the deploy log on the VM (deploy/publish open a live terminal
+                         for this by themselves; LAB_WATCH=0 to opt out)
+  watch-term VM          open that live terminal now (with the local TRANSCRIPT.md)
   tunnel VM [--sql] [--socks PORT] [--offset N]
                          forward VNC (8006, 6111-6115) and optionally SQL to this machine
   image VM [FAMILY]      make a custom image of the VM disk (fast clone path; VM is stopped)
@@ -150,6 +159,7 @@ cmd_deploy() {
   ctx; local n; n=$(vm_name "$1"); shift
   rcmd "$n" "cd $REMOTE_DIR && setsid -f nohup deploy/gcp/remote-deploy.sh $* > logs-gcp-deploy.log 2>&1 < /dev/null; sleep 2; tail -3 $REMOTE_DIR/logs-gcp-deploy.log"
   ok "deploy started on $n. Follow it: ./lab gcp watch $1   Consoles: ./lab gcp tunnel $1"
+  watch_gcp "$1"
 }
 cmd_watch() { ctx; local n; n=$(vm_name "$1"); gssh "$n" --command "tail -n 40 -F $REMOTE_DIR/logs-gcp-deploy.log $REMOTE_DIR/logs/progress.log" -- -t; }
 
@@ -217,7 +227,8 @@ main() {
     tunnel) cmd_tunnel "${1:?VM required}" "${@:2}" ;;
     image) cmd_image "$@" ;;
     artifacts) ctx; rcmd "$(vm_name "${1:?VM required}")" "cd $REMOTE_DIR && deploy/gcp/artifacts.sh status" ;;
-    publish) ctx; local n; n=$(vm_name "${1:?VM required}"); shift; rcmd "$n" "cd $REMOTE_DIR && deploy/gcp/artifacts.sh publish $*" ;;
+    watch-term) ctx; watch_gcp "${1:?VM required}" force ;;
+    publish) ctx; local n; n=$(vm_name "${1:?VM required}"); watch_gcp "$1"; shift; rcmd "$n" "cd $REMOTE_DIR && deploy/gcp/artifacts.sh publish $*" ;;
     fetch) ctx; local n; n=$(vm_name "${1:?VM required}"); shift; rcmd "$n" "cd $REMOTE_DIR && deploy/gcp/artifacts.sh fetch $*" ;;
     cost) cmd_cost ;;
     *) usage; die "unknown command: $c" ;;
