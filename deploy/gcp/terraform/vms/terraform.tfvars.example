@@ -11,6 +11,7 @@ vms = {
   # "bill-2"  = { owner = "bill", spot = false }   # standard (non-spot) VM
   # "alice-1" = { owner = "alice" }
   # "ci-1"    = { owner = "ci", publisher = true }   # may write artifacts to the bucket
+  # "bill-2"  = { owner = "bill", name = "vm2", source_snapshot = "sqlag-bill-1-snap" }  # clone of a built VM (./lab gcp snapshot bill-1)
 }
 
 # Defaults for all VMs (each entry above can override machine_type, min_cpu_platform,

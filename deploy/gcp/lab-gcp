@@ -51,6 +51,7 @@ VM lifecycle (gcloud):
   watch-term VM          open that live terminal now (with the local TRANSCRIPT.md)
   tunnel VM [--sql] [--socks PORT] [--offset N]
                          forward VNC (8006, 6111-6115) and optionally SQL to this machine
+  snapshot VM [NAME]     snapshot the stopped VM disk (clone path: vms source_snapshot)
   image VM [FAMILY]      make a custom image of the VM disk (fast clone path; VM is stopped)
 
 Artifacts (shared bucket; run on the VM with the VM service account):
@@ -76,7 +77,12 @@ ctx() {
   PREFIX=${GCP_NAME_PREFIX:-sqlag}
   [[ -n $PROJECT && -n $ZONE ]] || die "unknown project/zone: run ./lab gcp apply first, or set GCP_PROJECT and GCP_ZONE"
 }
-vm_name() { local n=${1:?VM required}; [[ $n == "$PREFIX"-* ]] && echo "$n" || echo "$PREFIX-$n"; }
+vm_name() {  # key (bill-1) or GCE name; a vms entry with name = "..." maps its key to that name
+  local n=${1:?VM required} m
+  [[ $n == "$PREFIX"-* ]] && { echo "$n"; return; }
+  m=$(tf_out vm_lines 2>/dev/null | awk -v k="$n" '$1 == k || $2 == k {print $2; exit}') || true
+  echo "${m:-$PREFIX-$n}"
+}
 gssh() { # NAME [ssh args...]
   local n=$1; shift
   gc compute ssh "$n" --project "$PROJECT" --zone "$ZONE" --tunnel-through-iap --quiet "$@"
@@ -188,6 +194,15 @@ cmd_tunnel() {
   gssh "$n" -- -o ExitOnForwardFailure=yes "${f[@]}"
 }
 
+cmd_snapshot() {  # snapshot of a STOPPED VM's boot disk, for clones (vms entry: source_snapshot = NAME)
+  ctx; local n; n=$(vm_name "$1"); local snap=${2:-$n-snap-$(date +%Y%m%d-%H%M)}
+  [[ $(gc compute instances describe "$n" --project "$PROJECT" --zone "$ZONE" --format='value(status)') == TERMINATED ]] \
+    || die "$n must be stopped for a consistent snapshot: ./lab gcp stop $1"
+  gc compute snapshots create "$snap" --project "$PROJECT" --source-disk "$n" --source-disk-zone "$ZONE" \
+    --storage-location "${ZONE%-*}" --labels app=sql-ag-lab
+  ok "snapshot $snap. Clone: add to vms terraform.tfvars:  \"<owner>-<n>\" = { owner = ..., source_snapshot = \"$snap\" }"
+}
+
 cmd_image() {
   ctx; local n; n=$(vm_name "$1"); local fam=${2:-sqlag-lab-built}
   log "stopping $n to take a consistent disk image"; gc compute instances stop "$n" --project "$PROJECT" --zone "$ZONE"
@@ -227,6 +242,7 @@ main() {
     tunnel) cmd_tunnel "${1:?VM required}" "${@:2}" ;;
     image) cmd_image "$@" ;;
     artifacts) ctx; rcmd "$(vm_name "${1:?VM required}")" "cd $REMOTE_DIR && deploy/gcp/artifacts.sh status" ;;
+    snapshot) cmd_snapshot "$@" ;;
     watch-term) ctx; watch_gcp "${1:?VM required}" force ;;
     publish) ctx; local n; n=$(vm_name "${1:?VM required}"); watch_gcp "$1"; shift; rcmd "$n" "cd $REMOTE_DIR && deploy/gcp/artifacts.sh publish $*" ;;
     fetch) ctx; local n; n=$(vm_name "${1:?VM required}"); shift; rcmd "$n" "cd $REMOTE_DIR && deploy/gcp/artifacts.sh fetch $*" ;;

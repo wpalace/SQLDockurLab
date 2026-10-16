@@ -1,13 +1,14 @@
 locals {
   region = join("-", slice(split("-", var.zone), 0, 2))
   vms = { for k, v in var.vms : k => {
-    name             = "${var.name_prefix}-${k}"
+    name             = coalesce(v.name, "${var.name_prefix}-${k}")
     owner            = v.owner
     machine_type     = coalesce(v.machine_type, var.default_machine_type)
     min_cpu_platform = coalesce(v.min_cpu_platform, var.default_min_cpu_platform)
     disk_type        = coalesce(v.disk_type, var.default_disk_type)
     disk_size_gb     = coalesce(v.disk_size_gb, var.default_disk_size_gb)
-    image            = coalesce(v.image, var.default_image)
+    image            = v.source_snapshot == null ? coalesce(v.image, var.default_image) : null
+    source_snapshot  = v.source_snapshot
     cpu_model        = coalesce(v.cpu_model, var.default_cpu_model)
     spot             = coalesce(v.spot, var.default_spot)
     publisher        = v.publisher
@@ -48,10 +49,11 @@ resource "google_compute_instance" "lab" {
   boot_disk {
     auto_delete = true
     initialize_params {
-      image  = each.value.image
-      size   = each.value.disk_size_gb
-      type   = each.value.disk_type
-      labels = { app = "sql-ag-lab", owner = each.value.owner }
+      image    = each.value.image
+      snapshot = each.value.source_snapshot
+      size     = each.value.disk_size_gb
+      type     = each.value.disk_type
+      labels   = { app = "sql-ag-lab", owner = each.value.owner }
     }
   }
 
