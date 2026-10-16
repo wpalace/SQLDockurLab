@@ -23,6 +23,9 @@ if pwsh -NoProfile -Command 'exit [int](-not (Get-Module -ListAvailable PSScript
   step PSScriptAnalyzer
   pwsh -NoProfile -Command "\$r=@(Invoke-ScriptAnalyzer -Path guest -Severity Error -ExcludeRule PSAvoidUsingConvertToSecureStringWithPlainText)+@(Invoke-ScriptAnalyzer -Path build/base/oem/lab -Severity Error -ExcludeRule PSAvoidUsingConvertToSecureStringWithPlainText); \$r|ft -auto|Out-String|Write-Host; exit \$r.Count" || rc=1
 fi
+step "operator front end (tests/validate.ps1: parse, PSScriptAnalyzer, Pester)"
+if type -P pwsh >/dev/null; then command pwsh -NoProfile -File tests/validate.ps1 || rc=1
+else pwsh -NoProfile -File tests/validate.ps1 || rc=1; fi  # container: validate.ps1 installs its modules
 step yamllint; yamllint -d '{extends: relaxed, rules: {line-length: disable}}' compose.yml compose.vhost.yml build/base/compose.yml ci/*.yml || rc=1
 step "compose config"
 $DOCKER compose -f compose.yml -f compose.vhost.yml --env-file lab.env config -q || rc=1
