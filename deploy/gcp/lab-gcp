@@ -33,7 +33,7 @@ Infrastructure (Terraform; ROOT = shared | vms, default vms):
   init [ROOT]            terraform init (uses backend.tf when present)
   plan [ROOT]            terraform plan
   apply [ROOT]           terraform apply  (shared: once per project; vms: your VMs)
-  destroy [ROOT]         terraform destroy
+  destroy [ROOT]         terraform destroy of a whole root (asks for confirmation)
   create VM | delete VM  apply/destroy one entry of vms in terraform.tfvars
   tf-check               terraform fmt -check + validate for both roots (no credentials)
 
@@ -53,6 +53,18 @@ VM lifecycle (gcloud):
                          forward VNC (8006, 6111-6115) and optionally SQL to this machine
   snapshot VM [NAME]     snapshot the stopped VM disk (clone path: vms source_snapshot)
   image VM [FAMILY]      make a custom image of the VM disk (fast clone path; VM is stopped)
+
+Golden snapshot and clones (MAKE.md G8-G10):
+  test VM                run TC1-TC7 on the VM (tests/run-tcs.sh); fails if any test fails
+  golden VM [NAME]       only after a test pass: stop the VM, snapshot its disk as
+                         sqlag-golden-YYYYMMDD-HHMM (labels kind=golden), record it as latest
+  finish VM              test, then golden (the final build step)
+  snapshots              list lab snapshots and the latest golden one
+  use-snapshot NAME      record NAME as the latest golden snapshot
+  spawn NAME [--disk-type pd-ssd|pd-balanced|pd-standard] [--snapshot S] [--machine-type M] [--no-up]
+                         new VM NAME from the latest golden snapshot (Terraform, spawned.auto.tfvars.json),
+                         wait for SSH, check, first restore of golden (LAB_UP_TIMEOUT=1800), deep health
+  destroy NAME [--yes]   delete a spawned VM and its disk (asks unless --yes; tfvars VMs are refused)
 
 Artifacts (shared bucket; run on the VM with the VM service account):
   artifacts VM           show the bucket manifest
@@ -212,6 +224,120 @@ cmd_image() {
   ok "image $img (family $fam). New VMs from it: set image = \"projects/$PROJECT/global/images/family/$fam\" in vms terraform.tfvars"
 }
 
+# --------------------------------------------------------------- golden snapshot flow --
+# build -> test (./lab gcp test) -> golden snapshot (./lab gcp golden; stops the VM) -> spawn clones.
+STATE_DIR_GCP="$GCP_DIR/state"; GOLDEN_FILE="$STATE_DIR_GCP/golden-snapshot"
+SPAWNED_JSON="$TF_VMS/spawned.auto.tfvars.json"
+note() {  # progress log + transcript line on this machine
+  "$LAB_ROOT/lab" log "gcp: $*" >/dev/null 2>&1 || true
+  printf -- '- %s %s\n' "$(date '+%F %H:%M %Z')" "$*" >> "$LAB_ROOT/TRANSCRIPT.md"
+}
+latest_golden() {  # recorded name, else the newest snapshot labelled kind=golden
+  [[ -s $GOLDEN_FILE ]] && { head -1 "$GOLDEN_FILE"; return; }
+  gc compute snapshots list --project "$PROJECT" --filter="labels.app=sql-ag-lab AND labels.kind=golden" \
+    --sort-by=~creationTimestamp --limit 1 --format='value(name)' 2>/dev/null
+}
+wait_ready() {  # SSH works and the startup script finished on this boot
+  local n=$1 i
+  for i in $(seq 1 120); do
+    rcmd "$n" "test -f /var/lib/sql-ag-lab/startup.done && grep -q '^LAB_GCP_NAME=$n\$' /etc/sql-ag-lab/gcp.env" >/dev/null 2>&1 && return 0
+    sleep 5
+  done; die "$n: no SSH / startup script after 10 min (see /var/log/sql-ag-lab-startup.log)"
+}
+
+cmd_test() {  # run MAKE.md TC1-TC7 on the VM; exit 0 only if ALL pass
+  ctx; local n; n=$(vm_name "$1"); local t0=$SECONDS
+  watch_gcp "$1"; note "tests started on $n"
+  rcmd "$n" "cd $REMOTE_DIR && rm -f logs/tests.passed && setsid -f nohup tests/run-tcs.sh > logs/tests.log 2>&1 < /dev/null"
+  local r=""
+  while :; do
+    sleep 20
+    r=$(rcmd "$n" "grep -E '^(ALL TESTS PASSED|TESTS FAILED)' $REMOTE_DIR/logs/tests.log" 2>/dev/null) || true
+    [[ -n $r ]] && break
+    (( SECONDS - t0 > 3600 )) && die "tests on $n did not finish in 60 min"
+  done
+  rcmd "$n" "grep -E '^(RESULT|TOTAL)' $REMOTE_DIR/logs/tests.log"
+  if [[ $r == "ALL TESTS PASSED" ]]; then note "tests on $n: ALL TESTS PASSED ($((SECONDS - t0)) s)"; ok "all tests passed on $n"
+  else note "tests on $n: FAILED, no golden snapshot"; die "tests failed on $n (see ~/$REMOTE_DIR/logs/tests.log). No snapshot."; fi
+}
+
+cmd_golden() {  # final build step: only after a test pass; stops the VM, snapshots the disk, records 'latest'
+  ctx; local n; n=$(vm_name "$1"); local snap=${2:-sqlag-golden-$(date +%Y%m%d-%H%M)}
+  local info
+  info=$(rcmd "$n" "cd $REMOTE_DIR && test -f logs/tests.passed && test logs/tests.passed -nt images/checkpoints/golden/meta.env && grep -h '^FINGERPRINT=' images/checkpoints/golden/meta.env && git rev-parse --short HEAD" 2>/dev/null) \
+    || { note "golden snapshot of $n REFUSED: no current test pass"; die "no current test pass on $n: run ./lab gcp test $1 first (the snapshot is only made after ALL tests pass)"; }
+  local fp commit; fp=$(sed -n 's/^FINGERPRINT=//p' <<<"$info"); commit=$(tail -1 <<<"$info")
+  log "stopping the lab and $n for a consistent disk"
+  rcmd "$n" "cd $REMOTE_DIR && ./lab down" >/dev/null || true
+  gc compute instances stop "$n" --project "$PROJECT" --zone "$ZONE" --quiet
+  local t0=$SECONDS
+  gc compute snapshots create "$snap" --project "$PROJECT" --source-disk "$n" --source-disk-zone "$ZONE" \
+    --storage-location "${ZONE%-*}" --description "sql-ag-lab golden from $n, commit $commit, checkpoint fingerprint $fp" \
+    --labels "app=sql-ag-lab,kind=golden,source=$n,fp=${fp,,},commit=${commit,,}"
+  mkdir -p "$STATE_DIR_GCP"; printf '%s\n' "$snap" > "$GOLDEN_FILE"
+  note "golden snapshot $snap of $n ($((SECONDS - t0)) s; fingerprint $fp, commit $commit); recorded as latest; $n is TERMINATED"
+  ok "golden snapshot $snap (latest). Spawn clones: ./lab gcp spawn NAME"
+}
+cmd_finish() { cmd_test "$1" && cmd_golden "$@"; }
+
+cmd_snapshots() {
+  ctx; log "golden snapshots (latest: $(latest_golden))"
+  gc compute snapshots list --project "$PROJECT" --filter="labels.app=sql-ag-lab" --sort-by=~creationTimestamp \
+    --format="table(name,creationTimestamp.date('%Y-%m-%d %H:%M'),diskSizeGb,storageBytes.size(units_out=G):label=STORED_GB,labels.kind,labels.source,labels.fp)"
+}
+cmd_use_snapshot() { ctx; local s=${1:?usage: use-snapshot NAME}; gc compute snapshots describe "$s" --project "$PROJECT" --format='value(name)' >/dev/null || die "no snapshot $s"; mkdir -p "$STATE_DIR_GCP"; echo "$s" > "$GOLDEN_FILE"; ok "latest golden snapshot: $s"; }
+
+spawned_edit() {  # spawned_edit add NAME JSON | del NAME
+  python3 - "$SPAWNED_JSON" "$@" <<'PY'
+import json, os, sys
+f, op, name = sys.argv[1:4]
+d = json.load(open(f)) if os.path.exists(f) else {}
+d.setdefault("spawned", {})
+if op == "add": d["spawned"][name] = json.loads(sys.argv[4])
+elif op == "has": sys.exit(0 if name in d["spawned"] else 1)
+else: d["spawned"].pop(name, None)
+json.dump(d, open(f, "w"), indent=2); open(f, "a").write("\n")
+PY
+}
+
+cmd_spawn() {  # spawn NAME [--disk-type T] [--snapshot S] [--machine-type M] [--owner O] [--no-up]
+  ctx; local name=${1:?usage: spawn NAME [--disk-type pd-ssd|pd-standard|pd-balanced] [--snapshot S] [--no-up]}; shift
+  local dtype="" snap="" mtype="" owner=${LAB_GCP_OWNER:-$(id -un | tr -cd 'a-z0-9-' | cut -c1-30)} up=1
+  while (( $# )); do case $1 in
+    --disk-type) dtype=$2; shift ;; --snapshot) snap=$2; shift ;; --machine-type) mtype=$2; shift ;;
+    --owner) owner=$2; shift ;; --no-up) up=0 ;; *) die "unknown option $1" ;; esac; shift; done
+  [[ $name =~ ^[a-z]([-a-z0-9]{0,61}[a-z0-9])?$ ]] || die "NAME must be a GCE name (lowercase letters, digits, hyphens)"
+  tf_out vm_lines | awk '{print $1; print $2}' | grep -qx "$name" && ! spawned_edit has "$name" \
+    && die "$name is a VM from terraform.tfvars (vms); spawn only makes new clones"
+  [[ -n $snap ]] || snap=$(latest_golden); [[ -n $snap ]] || die "no golden snapshot: run ./lab gcp finish VM (or use-snapshot NAME)"
+  local t0=$SECONDS entry
+  entry=$(python3 -c 'import json,sys; o,s,d,m=sys.argv[1:5]; e={"owner":o,"source_snapshot":s,"publisher":False}
+d and e.update(disk_type=d); m and e.update(machine_type=m); print(json.dumps(e))' "$owner" "$snap" "$dtype" "$mtype")
+  spawned_edit add "$name" "$entry"
+  note "spawn $name from $snap (disk ${dtype:-default})"
+  tf -chdir="$TF_VMS" apply -auto-approve -target="google_compute_instance.lab[\"$name\"]" || die "terraform apply failed (entry kept in $SPAWNED_JSON; fix and rerun, or ./lab gcp destroy $name)"
+  local t1=$SECONDS; wait_ready "$name"; local t2=$SECONDS
+  ok "$name created in $((t1 - t0)) s, SSH ready after $((t2 - t1)) s"
+  cmd_check "$name"
+  (( up )) || return 0
+  cmd_push "$name"
+  log "first restore of golden (a disk from a snapshot loads blocks on first read: can take minutes)"
+  rcmd "$name" "cd $REMOTE_DIR && LAB_UP_TIMEOUT=1800 ./lab up golden && ./lab console >/dev/null && ./lab health --deep --wait 300"
+  note "spawn $name ready at golden (create $((t1 - t0)) s, SSH $((t2 - t1)) s, golden $((SECONDS - t2)) s)"
+  ok "$name is at golden. Consoles: ./lab gcp tunnel $name   Remove: ./lab gcp destroy $name"
+}
+
+cmd_destroy_vm() {  # destroy NAME [--yes]: only VMs made by spawn
+  local name=$1 yes=0; [[ ${2:-} == --yes ]] && yes=1
+  spawned_edit has "$name" || die "$name was not made by ./lab gcp spawn. VMs in terraform.tfvars (for example bill-1) are kept safe: remove them with ./lab gcp delete KEY"
+  if (( ! yes )); then
+    read -r -p "Delete VM $name and its disk (data on it is lost; snapshots stay)? Type the name to confirm: " a
+    [[ $a == "$name" ]] || die "not confirmed"
+  fi
+  tf -chdir="$TF_VMS" destroy -auto-approve -target="google_compute_instance.lab[\"$name\"]" || die "terraform destroy failed"
+  spawned_edit del "$name"; note "destroyed spawned VM $name (and its boot disk)"; ok "$name deleted"
+}
+
 cmd_cost() {
   cat <<'COST'
 Rough ESTIMATE from public us-central1 list prices (2025-2026); check the Pricing Calculator:
@@ -228,7 +354,14 @@ main() {
   local c=${1:-help}; shift || true
   case $c in
     help|-h|--help) usage ;;
-    init|plan|apply|destroy) cmd_tf "$c" "$@" ;;
+    destroy) case ${1:-vms} in shared|vms) cmd_tf destroy "$@" ;; *) ctx; cmd_destroy_vm "$@" ;; esac ;;
+    init|plan|apply) cmd_tf "$c" "$@" ;;
+    test) cmd_test "${1:?VM required}" ;;
+    golden) cmd_golden "${1:?VM required}" "${@:2}" ;;
+    finish) cmd_finish "${1:?VM required}" "${@:2}" ;;
+    spawn) cmd_spawn "$@" ;;
+    snapshots) cmd_snapshots ;;
+    use-snapshot) cmd_use_snapshot "$@" ;;
     tf-check) cmd_tf_check ;;
     create) cmd_create "$@" ;;
     delete) cmd_delete "$@" ;;
