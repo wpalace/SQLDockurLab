@@ -259,7 +259,7 @@ The two front ends have the same commands and options. In this section, `./lab g
 5. Go to the repository directory. Run `.\lab.ps1 gcp tools`. The output must end with `operator tools ready`.
 6. Optional: install Windows Terminal (`winget install --id Microsoft.WindowsTerminal -e`). The live watch terminal opens there. Without it, the watch terminal opens in a new `pwsh` window.
 
-> **NOTE:** On Windows, `gcloud compute ssh` uses PuTTY (`plink`, `pscp`). gcloud installs these tools and makes the SSH key in `%USERPROFILE%\.ssh\google_compute_engine.ppk` at the first connection. `./lab.ps1 gcp tunnel` uses `gcloud compute start-iap-tunnel` for the console ports. `--sql` and `--socks` use SSH port forwarding.
+> **NOTE:** On Windows, `gcloud compute ssh` uses PuTTY (`plink`, `pscp`). gcloud installs these tools and makes the SSH key in `%USERPROFILE%\.ssh\google_compute_engine.ppk` at the first connection. `./lab.ps1 gcp tunnel` uses SSH port forwarding through IAP for the console ports, `--sql`, and `--socks`.
 
 > **NOTE:** `./lab.ps1 gcp console VM` makes the tunnel and opens the console URLs in the default browser.
 
