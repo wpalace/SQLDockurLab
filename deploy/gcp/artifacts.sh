@@ -78,7 +78,13 @@ cmd_fetch() {
   get_manifest
   mkdir -p "$LAB_MEDIA_DIR" "$LAB_IMAGES_DIR/base"
   if [[ -f "$LAB_MEDIA_DIR/$LAB_SQL_ISO" ]]; then ok "ISO present"
-  elif ! download iso "$LAB_MEDIA_DIR/$LAB_SQL_ISO"; then
+  elif download iso "$LAB_MEDIA_DIR/$LAB_SQL_ISO"; then :
+  elif gcloud storage cp -q "$PREFIX/media/$LAB_SQL_ISO" "$LAB_MEDIA_DIR/$LAB_SQL_ISO.part" 2>/dev/null \
+       && echo "$SQL_ISO_SHA256  $LAB_MEDIA_DIR/$LAB_SQL_ISO.part" | sha256sum -c --quiet -; then
+    # media/ without a manifest entry (for example after a bucket cleanup): verify with the known checksum
+    mv "$LAB_MEDIA_DIR/$LAB_SQL_ISO.part" "$LAB_MEDIA_DIR/$LAB_SQL_ISO"; ok "ISO fetched from $PREFIX/media (sha256 ok)"
+  else
+    rm -f "$LAB_MEDIA_DIR/$LAB_SQL_ISO.part"
     log "ISO not in bucket: downloading from Microsoft"
     curl -fL -o "$LAB_MEDIA_DIR/$LAB_SQL_ISO.part" "$SQL_ISO_URL"
     echo "$SQL_ISO_SHA256  $LAB_MEDIA_DIR/$LAB_SQL_ISO.part" | sha256sum -c --quiet - || die "ISO checksum mismatch"
