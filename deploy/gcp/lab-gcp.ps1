@@ -498,7 +498,7 @@ function Invoke-LabGcp([string[]]$Argv) {
         'deploy' { Invoke-Deploy (Arg1) (Rest1) }
         'watch' { Invoke-Watch (Arg1) }
         'tunnel' { Invoke-Tunnel (Arg1) (Rest1) }
-        'console' { Invoke-Tunnel (Arg1) (@(Rest1) + '--open') }
+        'console' { Invoke-Tunnel (Arg1) ([string[]](Rest1) + '--open') }
         'image' { Invoke-Image (Arg1) $(if ($a.Count -gt 1) { $a[1] } else { '' }) }
         'snapshot' { Invoke-Snapshot (Arg1) $(if ($a.Count -gt 1) { $a[1] } else { '' }) }
         'artifacts' { Set-Ctx; Invoke-Rcmd (Get-VmName (Arg1)) "cd $RemoteDir && deploy/gcp/artifacts.sh status" }
