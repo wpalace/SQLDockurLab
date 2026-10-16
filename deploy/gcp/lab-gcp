@@ -92,6 +92,7 @@ ctx() {
 vm_name() {  # key (bill-1) or GCE name; a vms entry with name = "..." maps its key to that name
   local n=${1:?VM required} m
   [[ $n == "$PREFIX"-* ]] && { echo "$n"; return; }
+  spawned_edit has "$n" 2>/dev/null && { echo "$n"; return; }   # spawned: key = exact GCE name
   m=$(tf_out vm_lines 2>/dev/null | awk -v k="$n" '$1 == k || $2 == k {print $2; exit}') || true
   echo "${m:-$PREFIX-$n}"
 }
@@ -120,8 +121,10 @@ cmd_tf_check() {
   done
   return $rc
 }
-cmd_create() { local k=${1:?usage: create KEY}; tf_need_vars "$TF_VMS"; tf -chdir="$TF_VMS" apply -target="google_compute_instance.lab[\"$k\"]"; }
-cmd_delete() { local k=${1:?usage: delete KEY}; tf_need_vars "$TF_VMS"; tf -chdir="$TF_VMS" destroy -target="google_compute_instance.lab[\"$k\"]"; }
+# A -target apply/destroy leaves the root outputs (vm_lines) stale: refresh them afterwards.
+tf_refresh_outputs() { tf -chdir="$TF_VMS" apply -refresh-only -auto-approve -input=false >/dev/null || warn "could not refresh terraform outputs"; }
+cmd_create() { local k=${1:?usage: create KEY}; tf_need_vars "$TF_VMS"; tf -chdir="$TF_VMS" apply -target="google_compute_instance.lab[\"$k\"]" && tf_refresh_outputs; }
+cmd_delete() { local k=${1:?usage: delete KEY}; tf_need_vars "$TF_VMS"; tf -chdir="$TF_VMS" destroy -target="google_compute_instance.lab[\"$k\"]" && tf_refresh_outputs; }
 
 cmd_list() {
   ctx
@@ -316,6 +319,7 @@ d and e.update(disk_type=d); m and e.update(machine_type=m); print(json.dumps(e)
   spawned_edit add "$name" "$entry"
   note "spawn $name from $snap (disk ${dtype:-pd-balanced default})"
   tf -chdir="$TF_VMS" apply -auto-approve -target="google_compute_instance.lab[\"$name\"]" || die "terraform apply failed (entry kept in $SPAWNED_JSON; fix and rerun, or ./lab gcp destroy $name)"
+  tf_refresh_outputs
   local t1=$SECONDS; wait_ready "$name"; local t2=$SECONDS
   ok "$name created in $((t1 - t0)) s, SSH ready after $((t2 - t1)) s"
   cmd_check "$name"
@@ -335,7 +339,7 @@ cmd_destroy_vm() {  # destroy NAME [--yes]: only VMs made by spawn
     [[ $a == "$name" ]] || die "not confirmed"
   fi
   tf -chdir="$TF_VMS" destroy -auto-approve -target="google_compute_instance.lab[\"$name\"]" || die "terraform destroy failed"
-  spawned_edit del "$name"; note "destroyed spawned VM $name (and its boot disk)"; ok "$name deleted"
+  spawned_edit del "$name"; tf_refresh_outputs; note "destroyed spawned VM $name (and its boot disk)"; ok "$name deleted"
 }
 
 cmd_cost() {
