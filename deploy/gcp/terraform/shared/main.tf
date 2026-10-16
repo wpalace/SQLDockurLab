@@ -145,3 +145,12 @@ resource "google_storage_bucket_iam_member" "writers" {
   role     = "roles/storage.objectAdmin"
   member   = each.value
 }
+
+# storage.buckets.get lets gcloud use parallel composite uploads (much faster for the
+# multi-GB base image and checkpoint archives).
+resource "google_storage_bucket_iam_member" "writers_bucket_read" {
+  for_each = toset(concat(["serviceAccount:${google_service_account.publisher.email}"], var.publishers))
+  bucket   = google_storage_bucket.artifacts.name
+  role     = "roles/storage.legacyBucketReader"
+  member   = each.value
+}
