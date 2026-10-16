@@ -303,15 +303,16 @@ Do all these tests after provisioning. Record each result in the summary (sectio
 1. To make a new lab host from the latest golden snapshot, run `./lab gcp spawn NAME`. Get approval from the user first (it makes a VM that costs money). The command:
    - Adds `NAME` to `deploy/gcp/terraform/vms/spawned.auto.tfvars.json` (not committed) and applies only that VM with Terraform.
    - Uses the same machine type, minimum CPU platform, network, and service account as the defaults in `terraform.tfvars`.
+   - Uses a `pd-balanced` boot disk (`default_spawned_disk_type`). The build VM uses `pd-ssd` (`default_disk_type`) for the base image and the lab build.
    - Waits for SSH and the startup script, does `./lab gcp check NAME`, and copies the repository.
    - Restores golden with `LAB_UP_TIMEOUT=1800`, and does a deep health check.
-2. Options: `--disk-type pd-ssd|pd-balanced|pd-standard`, `--snapshot SNAPSHOT`, `--machine-type TYPE`, `--no-up` (no restore).
+2. Options: `--disk-type pd-balanced|pd-ssd|pd-standard` (default `pd-balanced`), `--snapshot SNAPSHOT`, `--machine-type TYPE`, `--no-up` (no restore).
 3. To delete a spawned VM and its disk, run `./lab gcp destroy NAME`. Type the name to confirm, or use `--yes`. The snapshots stay.
 4. To use a different snapshot as latest, run `./lab gcp use-snapshot SNAPSHOT`.
 
 > **CAUTION:** `./lab gcp destroy NAME` deletes only VMs made by `spawn`. It refuses the VMs in `terraform.tfvars` (for example `bill-1`). To delete one of those, use `./lab gcp delete KEY` after approval from the user.
 
-> **NOTE:** The first restore on a spawned VM is slow. The disk loads each block from the snapshot when it is read for the first time. On `pd-standard`, the first restore took more than 180 s; after that, resets took 2.2-2.7 s. If you need fast first restores, use `pd-ssd` and make sure that the quota `SSD_TOTAL_GB` is sufficient.
+> **NOTE:** The first restore on a spawned VM is slow. The disk loads each block from the snapshot when it is read for the first time. On `pd-standard`, the first restore took more than 180 s; after that, resets took 2.2-2.7 s. If you need faster first restores, use `--disk-type pd-ssd`. `pd-balanced` and `pd-ssd` both use the quota `SSD_TOTAL_GB`.
 
 > **CAUTION:** A golden snapshot restores correctly only on a VM with the same CPU model and runtime image as the source VM. Keep the machine type and the minimum CPU platform the same as the source (the defaults). The snapshot label `fp` shows the checkpoint fingerprint. `./lab up` shows a warning when the fingerprint is different.
 

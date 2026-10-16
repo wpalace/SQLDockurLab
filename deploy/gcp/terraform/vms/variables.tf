@@ -120,6 +120,12 @@ variable "timezone" {
   default     = "UTC"
 }
 
+variable "default_spawned_disk_type" {
+  description = "Boot disk type of VMs made by ./lab gcp spawn (clones of the golden snapshot). The build VM uses default_disk_type (pd-ssd)."
+  type        = string
+  default     = "pd-balanced"
+}
+
 variable "spawned" {
   description = "Clones made by ./lab gcp spawn (written to spawned.auto.tfvars.json; do not edit by hand). Key = exact GCE name."
   type = map(object({
