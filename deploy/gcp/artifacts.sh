@@ -56,7 +56,8 @@ pub_checkpoints() {
   [[ -z "$($DOCKER ps -q -f name='^lab-sql1$')" ]] || die "run ./lab down first (checkpoints must not change while archived)"
   [[ -d "$LAB_IMAGES_DIR/checkpoints" ]] || die "no checkpoints"
   log "archiving checkpoints (sparse, zstd)"
-  tar -C "$LAB_IMAGES_DIR" -S -cf - checkpoints | zstd -q -T0 -3 -f -o "$TMP/checkpoints.tar.zst"
+  # state.bin files are written by QEMU as root: archive inside the runtime image (root, read-only mount)
+  $DOCKER run --rm -v "$LAB_IMAGES_DIR:/images:ro" --entrypoint tar "$LAB_IMAGE" -C /images -S -cf - checkpoints | zstd -q -T0 -3 -f -o "$TMP/checkpoints.tar.zst"
   upload checkpoints "$TMP/checkpoints.tar.zst" checkpoints/checkpoints.tar.zst
 }
 
