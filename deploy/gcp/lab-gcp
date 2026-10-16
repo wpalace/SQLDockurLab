@@ -238,8 +238,8 @@ latest_golden() {  # recorded name, else the newest snapshot labelled kind=golde
     --sort-by=~creationTimestamp --limit 1 --format='value(name)' 2>/dev/null
 }
 wait_ready() {  # SSH works and the startup script finished on this boot
-  local n=$1 i
-  for i in $(seq 1 120); do
+  local n=$1
+  for _ in $(seq 1 120); do
     rcmd "$n" "test -f /var/lib/sql-ag-lab/startup.done && grep -q '^LAB_GCP_NAME=$n\$' /etc/sql-ag-lab/gcp.env" >/dev/null 2>&1 && return 0
     sleep 5
   done; die "$n: no SSH / startup script after 10 min (see /var/log/sql-ag-lab-startup.log)"
