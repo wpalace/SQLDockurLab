@@ -60,6 +60,7 @@ pub_checkpoints() {
   # inside the runtime image (root, read-only mount; slower, the stream goes through dockerd)
   local tarcmd=(tar -C "$LAB_IMAGES_DIR" -S -cf - checkpoints)
   if ! sudo -n true 2>/dev/null; then
+    # shellcheck disable=SC2206  # DOCKER may be "sudo docker": split on purpose
     tarcmd=($DOCKER run --rm -v "$LAB_IMAGES_DIR:/images:ro" --entrypoint tar "$LAB_IMAGE" -C /images -S -cf - checkpoints)
   else tarcmd=(sudo -n "${tarcmd[@]}"); fi
   "${tarcmd[@]}" | zstd -q -T0 -3 -f -o "$TMP/checkpoints.tar.zst"
