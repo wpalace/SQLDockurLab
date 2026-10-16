@@ -251,6 +251,8 @@ Do all these tests after provisioning. Record each result in the summary (sectio
 
 > **CAUTION:** Memory checkpoints restore only on a lab host with the same runtime image, the same `LAB_CPU_MODEL`, and the same `lab.env`. Use the same machine type and minimum CPU platform on all VMs that share checkpoints. With `cpu_model = "host"`, a different CPU generation makes the restore fail. The fetch step compares fingerprints and skips checkpoints that do not agree.
 
+> **NOTE:** Publish times on n2-standard-16 with pd-ssd: ISO + base image + runtime image about 2 min. Checkpoints: archive about 2.5 min, hash about 2 min, upload about 3.5 min (22 GB compressed from 55 GB).
+
 > **NOTE:** Optional fast clone: `./lab gcp image VM` makes a custom image of a fully built lab host. Set `image` for a new VM to that image family. The checkpoints on the lab host stay the reset method (`./lab reset`).
 
 ### G7. Deploy the lab
@@ -264,6 +266,8 @@ Do all these tests after provisioning. Record each result in the summary (sectio
 > **NOTE:** The networks 10.50.0.0/24 and 10.51.0.0/24 exist only on the lab host. Use the port forwards, or `--socks PORT` for a SOCKS proxy.
 
 > **NOTE:** A spot VM can be preempted. Then it stops and keeps its disk. Run `./lab gcp start VM`, then `./lab gcp deploy VM` again. The deploy continues from the last completed stage (base image, checkpoint). An interrupted base build starts again.
+
+> **NOTE:** Measured on GCP (n2-standard-16, pd-ssd 300 GB, empty bucket): apply shared 1 min, apply vms 30 s, startup script 2 min, deploy 40 min (build-base 22 min, provision 17 min), reset 2-6 s.
 
 ### G8. Tests
 
