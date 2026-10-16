@@ -296,34 +296,38 @@ function Invoke-Tunnel([string]$key, [string[]]$Rest) {
         if ($off) { Warn "local ports 8006/6111-6115 are in use (local lab?): forwarding to local port + $off" }
     }
     Log "tunnel to $n (Ctrl-C to stop)"
-    # VNC ports of the VM itself: gcloud start-iap-tunnel (no SSH client needed), one process each.
-    $procs = foreach ($p in $vnc) {
-        Start-Process (Get-Command gcloud).Source -NoNewWindow -PassThru -ArgumentList @('compute', 'start-iap-tunnel', $n, "$p", "--local-host-port=localhost:$($p + $off)", '--project', $script:Project, '--zone', $script:Zone)
-    }
+    # One IAP SSH session with local forwards. The consoles listen on 127.0.0.1 of the VM and the
+    # lab networks exist only on the VM, so IAP TCP forwarding to the VM NIC cannot reach them.
+    $f = @('-N')
+    foreach ($p in $vnc) { $f += @('-L', "$($p + $off):127.0.0.1:$p") }
+    if ($sql) { foreach ($m in @('14330:10.50.0.60', '14339:10.51.0.60', '14331:10.50.0.11', '14332:10.50.0.12', '14333:10.51.0.13', '14334:10.51.0.14')) { $f += @('-L', "${m}:1433") } }
+    if ($socks) { $f += @('-D', $socks) }
+    if (-not $IsWindows) { $f = @('-o', 'ExitOnForwardFailure=yes') + $f }   # OpenSSH only (Windows: plink)
     $urls = @("http://127.0.0.1:$(8006 + $off)") + @(6111..6115 | ForEach-Object { "http://127.0.0.1:$($_ + $off)/vnc.html?autoconnect=1&resize=scale&reconnect=1" })
     Write-Host "  base build console  $($urls[0])"
     $urls[1..5] | ForEach-Object { Write-Host "  VM console          $_" }
+    if ($sql) {
+        Write-Host '  SQL listener        127.0.0.1,14330 (subnet A IP; use 14339 when the primary is on SQL3/SQL4)'
+        Write-Host '  SQL1..SQL4          127.0.0.1,14331 .. 127.0.0.1,14334 (SQL auth)'
+    }
+    if ($socks) { Write-Host "  SOCKS proxy         127.0.0.1:$socks" }
+    $ga = @('compute', 'ssh', $n, '--project', $script:Project, '--zone', $script:Zone, '--tunnel-through-iap', '--quiet', '--') + $f
+    $proc = Start-Process (Get-Command gcloud).Source -ArgumentList $ga -NoNewWindow -PassThru
     try {
         if ($open) {
-            Start-Sleep -Seconds 6
-            # Base build console only while it answers; VM consoles always.
+            $deadline = (Get-Date).AddSeconds(60)
+            while (-not (Test-LocalPort (6111 + $off)) -and (Get-Date) -lt $deadline -and -not $proc.HasExited) { Start-Sleep -Milliseconds 500 }
+            if ($proc.HasExited) { Die "tunnel to $n stopped (exit $($proc.ExitCode))" }
             foreach ($u in $urls[1..5]) { Start-Process $u }
-            if (Test-LocalPort (8006 + $off)) { Start-Process $urls[0] }
+            if ((Invoke-WebRequestStatus $urls[0]) -eq 200) { Start-Process $urls[0] }   # base build console only while it runs
             Ok 'console URLs opened in the default browser'
         }
-        if ($sql -or $socks) {
-            # The lab networks exist only on the VM: forward each SQL endpoint over IAP SSH.
-            $f = @('--', '-N')
-            if ($sql) {
-                foreach ($m in @('14330:10.50.0.60', '14339:10.51.0.60', '14331:10.50.0.11', '14332:10.50.0.12', '14333:10.51.0.13', '14334:10.51.0.14')) { $f += @('-L', "${m}:1433") }
-                Write-Host '  SQL listener        127.0.0.1,14330 (subnet A IP; use 14339 when the primary is on SQL3/SQL4)'
-                Write-Host '  SQL1..SQL4          127.0.0.1,14331 .. 127.0.0.1,14334 (SQL auth)'
-            }
-            if ($socks) { $f += @('-D', $socks); Write-Host "  SOCKS proxy         127.0.0.1:$socks" }
-            if (-not $IsWindows) { $f = @('--', '-o', 'ExitOnForwardFailure=yes') + $f[1..($f.Count - 1)] }
-            Invoke-Gssh $n $f
-        } else { $procs | Wait-Process }
-    } finally { $procs | Where-Object { -not $_.HasExited } | Stop-Process -Force -ErrorAction SilentlyContinue }
+        $proc | Wait-Process
+        if ($proc.ExitCode) { Die "tunnel to $n stopped (exit $($proc.ExitCode))" }
+    } finally { if (-not $proc.HasExited) { Stop-Process -Id $proc.Id -Force -ErrorAction SilentlyContinue } }
+}
+function Invoke-WebRequestStatus([string]$u) {
+    try { (Invoke-WebRequest -Uri $u -TimeoutSec 5 -SkipHttpErrorCheck -UseBasicParsing).StatusCode } catch { 0 }
 }
 
 function Invoke-Snapshot([string]$key, [string]$snap) {

@@ -12,7 +12,7 @@ Windows, Linux and macOS. The lab host (GCE VM) stays Linux and bash.
 | `lib/watch.sh` (`watch_open`, `watch_local`) | `lib/LabHost.psm1` (`Open-LabWatch`) | Windows Terminal or a new pwsh window; Linux terminals as before |
 | `lib/common.sh` `plog` / `./lab log` | `lib/LabHost.psm1` (`Write-LabProgress`, `Add-LabNote`) | same `logs/progress.log` and `TRANSCRIPT.md` lines |
 | python3 in `spawned_edit` | `Edit-Spawned` (`ConvertFrom-Json -AsHashtable`) | no python on the operator machine |
-| `gcloud compute ssh -- -N -L ...` for VNC | `gcloud compute start-iap-tunnel` (one per port) | no SSH client for the consoles |
+| `gcloud compute ssh -- -N -L ...` (tunnel) | the same, started with `Start-Process`; `--open` opens the browser | consoles bind 127.0.0.1 on the VM, so IAP TCP forwarding (`start-iap-tunnel`) cannot reach them |
 | `tests/validate.sh` | + `tests/validate.ps1`, `tests/LabGcp.Tests.ps1` | parse, PSScriptAnalyzer, Pester |
 
 ## Not converted (run on the Linux lab host)
