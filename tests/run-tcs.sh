@@ -4,14 +4,14 @@
 # Exit 0 only when ALL tests pass. On success writes logs/tests.passed (commit, fingerprint, time);
 # on any failure removes it. ./lab gcp golden refuses to snapshot without a current tests.passed.
 set -uo pipefail
-cd "$(dirname "$0")/.."
+cd "$(dirname "$0")/.." || exit 1
 RESETS=10; [[ ${1:-} == --resets ]] && RESETS=$2
 MARK=logs/tests.passed; mkdir -p logs; rm -f "$MARK"
 fails=0 T0=$SECONDS
 res() { local name=$1 rc=$2 t=$3; if (( rc == 0 )); then echo "RESULT $name PASS ${t}s"; else echo "RESULT $name FAIL ${t}s"; fails=$((fails + 1)); fi; ./lab log "test $name $([[ $rc == 0 ]] && echo PASS || echo FAIL) (${t}s)"; }
 healthy() { local want=$1 out; out=$(./lab health --deep --wait "${2:-60}" 2>&1); echo "$out" | grep -E "listener|HEALTHY"; grep -q "listener LabAGL -> $want" <<<"$out" && grep -qx "  HEALTHY" <<<"$out"; }
 failover() { ./lab ssh "$1" "Invoke-Sqlcmd -Query 'ALTER AVAILABILITY GROUP [LabAG] FAILOVER'" >/dev/null 2>&1; }
-ms() { date +%s%3N; }; dt() { echo $(( ($(ms) - $1) / 100 )) | sed 's/\(.\)$/.\1/'; }
+ms() { date +%s%3N; }; dt() { local d=$(( ($(ms) - $1) / 100 )); printf "%d.%d" $((d / 10)) $((d % 10)); }
 
 ./lab log "START tests/run-tcs.sh (TC1-TC7)"
 t=$(ms); tests/validate.sh > logs/tc1.log 2>&1; res TC1 $? "$(dt "$t")"
