@@ -1,5 +1,5 @@
 <# Deep health check, run on any SQL node. Exit 0 only if the whole lab is healthy:
-   all cluster nodes Up, every AG replica CONNECTED + HEALTHY, sync replicas SYNCHRONIZED,
+   all cluster nodes Up, every AG replica CONNECTED + HEALTHY, sync replicas SYNCHRONIZED (when the primary is sync),
    listener reachable through MultiSubnetFailover and a write through it succeeds.
    -Json emits a machine-readable summary (used by `./lab health --deep`). #>
 param([switch]$Json, [int]$WaitSeconds = 0)
@@ -30,10 +30,14 @@ ORDER BY ar.replica_server_name;
         $reps = @(); if ($rows) { foreach ($r in $rows.Rows) { $reps += [ordered]@{ replica = $r.replica; role = "$($r.role)"; connected = "$($r.connected)"; health = "$($r.health)"; mode = $r.mode; db = $r.dbstate } } }
         $result.replicas = $reps
         if ($reps.Count -ne @($c.replicas).Count) { $problems.Add("expected $(@($c.replicas).Count) replicas, found $($reps.Count)") }
+        $primaryMode = @($reps | Where-Object { $_.role -eq 'PRIMARY' } | ForEach-Object { $_.mode })[0]
         foreach ($r in $reps) {
             if ($r.connected -and $r.connected -ne 'CONNECTED') { $problems.Add("$($r.replica) $($r.connected)") }
             if ($r.health -ne 'HEALTHY') { $problems.Add("$($r.replica) health=$($r.health)") }
-            if ($r.mode -eq 'SYNCHRONOUS_COMMIT' -and $r.db -ne 'SYNCHRONIZED') { $problems.Add("$($r.replica) db=$($r.db)") }
+            # A secondary is synchronous only when the primary is synchronous too: with an
+            # asynchronous primary (for example SQL3 after a planned failover) SYNCHRONIZING is correct.
+            if ($r.mode -eq 'SYNCHRONOUS_COMMIT' -and $primaryMode -eq 'SYNCHRONOUS_COMMIT' -and $r.db -ne 'SYNCHRONIZED') { $problems.Add("$($r.replica) db=$($r.db)") }
+            if ($r.db -and $r.db -notin @('SYNCHRONIZED', 'SYNCHRONIZING')) { $problems.Add("$($r.replica) db=$($r.db)") }
         }
     } catch { $problems.Add("AG query failed: $($_.Exception.Message)") }
     try {

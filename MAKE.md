@@ -20,6 +20,7 @@ Read this file completely before you start. Do the procedures in sequence.
 - One domain controller: DC1, 10.50.0.10, domain `lab.local`.
 - Four SQL Server 2025 nodes: SQL1 and SQL2 on 10.50.0.0/24, SQL3 and SQL4 on 10.51.0.0/24.
 - One WSFC cluster (`LABCLU`), AG `LabAG` with database `LabDB`, listener `LabAGL` at 10.50.0.60 and 10.51.0.60, port 1433.
+- Replica modes (`LAB_AG_MODES` in `lab.env`): SQL1 and SQL2 synchronous commit with automatic failover (HA). SQL3 and SQL4 asynchronous commit with manual failover (DR).
 - Passwords: see `lab.env` (`LAB_PASSWORD`). Run `./lab info` to show all connection data.
 
 ## 1a. Choose the deployment target
@@ -118,7 +119,8 @@ Read this file completely before you start. Do the procedures in sequence.
 2. Wait until `provision.log` shows `waiting for all VMs`.
 3. Run `./lab vnc`. This opens one noVNC tab for each VM (DC1, SQL1-SQL4) in the default browser. If there is no graphical session, give the printed URLs to the user.
 4. Monitor `provision.log` every 5 min.
-5. Expect these log lines in this order: `stage 1/3`, `checkpoint 'sql-standalone' saved`, `stage 2/3`, `checkpoint 'cluster' saved`, `stage 3/3`, `HEALTHY`, `checkpoint 'golden' saved`, `provisioning finished`.
+5. Expect these log lines in this order: `stage 1/3`, `checkpoint 'sql-standalone' saved`, `stage 2/3`, `checkpoint 'cluster' saved`, `stage 3/3`, `HEALTHY`, `failover chain OK`, `HEALTHY`, `checkpoint 'golden' saved`, `provisioning finished`.
+   The failover chain is a planned failover SQL1 -> SQL2 -> SQL3 -> SQL4 -> SQL1. After each move, a heartbeat row is written through the listener and must be visible on the new primary. The chain ends with SQL1 as primary and the modes from `lab.env`, before the golden checkpoint is saved. To skip it, set `LAB_FAILOVER_CHAIN=0`.
 6. If provisioning stops with an error, fix the cause (section 9). Then continue from the last checkpoint that was saved:
    `./lab provision sql-standalone` or `./lab provision cluster`.
    If no checkpoint is saved yet (a failure in stage 1), run `./lab provision` again. The VM disks keep the work that is done, and the guest scripts skip the steps that are complete.
@@ -142,6 +144,13 @@ Read this file completely before you start. Do the procedures in sequence.
 | Open VM consoles | `./lab vnc` |
 | Show status | `./lab status` |
 | PowerShell on a VM | `./lab ssh SQL1` |
+| Planned failover, no data loss | `./lab failover SQL3` |
+| Change replica modes | `./lab failover-modes "SQL3:SYNCHRONOUS_COMMIT:MANUAL ..."` (`config` = `lab.env`) |
+| Power off one VM (test) | `./lab kill SQL1` |
+
+> **CAUTION:** Do not run `ALTER AVAILABILITY GROUP ... FAILOVER` on an asynchronous replica. Use `./lab failover SQLn`. The command does these steps: (1) it sets the primary and the target to `SYNCHRONOUS_COMMIT`, (2) it waits until the target is `SYNCHRONIZED`, (3) it runs `FAILOVER` on the target (no data loss), (4) it sets the original modes again. `FORCE_FAILOVER_ALLOW_DATA_LOSS` is necessary only if the primary is lost; do not use it for planned failovers.
+
+> **NOTE:** An AG can have at most 3 replicas with automatic failover (SQL Server 2025, including the primary). Before you set more replicas to `AUTOMATIC`, set others to `MANUAL`. `./lab failover-modes` changes the modes in a safe sequence: `MANUAL` first, then the availability mode, then `AUTOMATIC`.
 
 > **CAUTION:** You cannot replace the checkpoint that the lab currently runs on. Save under a new name.
 
@@ -151,18 +160,19 @@ Read this file completely before you start. Do the procedures in sequence.
 
 Do all these tests after provisioning. Record each result in the summary (section 10).
 
-> **NOTE:** `tests/run-tcs.sh` does TC1 to TC7 automatically. It shows `PASS` or `FAIL` and the duration for each test, and ends with `ALL TESTS PASSED` or `TESTS FAILED`. For TC7, it examines the URLs with `curl`; ask the user to confirm the screens.
+> **NOTE:** `tests/run-tcs.sh` does TC1 to TC9 automatically. It shows `PASS` or `FAIL` and the duration for each test, and ends with `ALL TESTS PASSED` or `TESTS FAILED`. For TC7, it examines the URLs with `curl`; ask the user to confirm the screens.
 
 1. **TC1 Static checks.** Run `tests/validate.sh`. Expected: `ALL STATIC CHECKS PASSED`.
 2. **TC2 Engine test.** Run `tests/e2e-fakeguest.sh`. Expected: `all e2e checks passed`. Run it only when no lab is running, because it uses the same container names.
 3. **TC3 Reset loop.** Do these steps 10 times: run `./lab reset golden`, then `./lab health --deep --wait 60`. (Without `--wait`, a check right after a restore can show `unreachable` for a few seconds.) Record each duration. Expected: each reset takes less than 60 s, and each result is `HEALTHY` with SQL1 as primary.
-4. **TC4 Cross-subnet failover.** Run on SQL3:
-   `./lab ssh SQL3 "Invoke-Sqlcmd -Query 'ALTER AVAILABILITY GROUP [LabAG] FAILOVER'"`.
+4. **TC4 Cross-subnet failover to an asynchronous replica.** Run `./lab failover SQL3` (planned, no data loss; see section 7).
    Run `./lab health --deep --wait 60`. Expected: `listener LabAGL -> SQL3` and `HEALTHY`.
 5. **TC5 Failback.** Do TC4 again on SQL1. Expected: `listener LabAGL -> SQL1`.
 6. **TC6 Reset after change.** Do TC4 again (SQL3 becomes primary). Run `./lab reset`, then `./lab health --deep --wait 60`. Expected: SQL1 is primary, the status is `HEALTHY`, and `./lab status` shows `checkpoint: golden`.
 7. **TC7 Consoles.** Run `./lab vnc`. Expected: five tabs. Each tab title starts with `QEMU (`. If you cannot see the browser, run `./lab vnc urls` and `curl -s -o /dev/null -w '%{http_code}' URL` for each URL. Expected: `200`. Ask the user to confirm that the tabs show the VM screens.
-8. When all the tests are complete, run `./lab reset`. Leave the lab running at golden.
+8. **TC8 Automatic failover in subnet A.** From golden: write a marker row through the listener, run `./lab kill SQL1`, and wait until the listener reaches SQL2 (`./lab agtool -WaitPrimary SQL2 -Note MARK`). Expected: listener -> SQL2 on 10.50.0.60, `LabDB` writable, the marker row is present. Record the time from power-off to online. Then run `./lab up golden` and `./lab health --deep --wait 60` (SQL1 primary, `HEALTHY`).
+9. **TC9 Automatic failover in subnet B.** From golden: `./lab failover SQL3`. Then `./lab failover-modes "SQL1:SYNCHRONOUS_COMMIT:MANUAL SQL2:SYNCHRONOUS_COMMIT:MANUAL SQL3:SYNCHRONOUS_COMMIT:AUTOMATIC SQL4:SYNCHRONOUS_COMMIT:AUTOMATIC"` and `./lab agtool -WaitSync SQL4`. Write a marker row, run `./lab kill SQL3`, and wait for SQL4. Expected: listener -> SQL4 on 10.51.0.60, the marker row is present. Then `./lab up golden` and the deep health check (SQL1 primary, `HEALTHY`).
+10. When all the tests are complete, run `./lab reset`. Leave the lab running at golden.
 
 ## 7a. Connect with VS Code
 
@@ -301,7 +311,7 @@ Use the VS Code extension `ms-mssql.mssql` (SQL Server). Windows authentication 
 
 ### G8. Tests
 
-1. Run `./lab gcp test VM`. This runs the test cases TC1 to TC7 (section 8) on the lab host with `tests/run-tcs.sh`. The live watch terminal opens.
+1. Run `./lab gcp test VM`. This runs the test cases TC1 to TC9 (section 8) on the lab host with `tests/run-tcs.sh`. The live watch terminal opens.
 2. The output must end with `all tests passed on VM`. The output shows one `RESULT` line with `PASS` or `FAIL` and the duration for each test.
 3. Record the results in `TRANSCRIPT.md` (section 10).
 4. If a test fails, go to section 9. Do not do G9. You can run `./lab gcp test VM` again: TC2 removes the old files in `/tmp/sql-ag-lab-e2e` at start and at end.

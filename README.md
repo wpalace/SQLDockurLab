@@ -64,7 +64,7 @@ any node IP. `./lab info` prints everything. Use SQL auth from the host (see *Ti
 |---|---|
 | `sql-standalone` | domain up, 4 domain-joined standalone SQL 2025 instances, no cluster |
 | `cluster` | + 2-subnet WSFC `LABCLU` (FSW on DC1), Always On enabled, endpoints, **no AG** |
-| `golden` | + AG `LabAG` (SQL1/SQL2 sync-auto, SQL3 sync-manual, SQL4 async), DB `LabDB`, listener `LabAGL` |
+| `golden` | + AG `LabAG` (SQL1/SQL2 sync-auto, SQL3/SQL4 async-manual), DB `LabDB`, listener `LabAGL` |
 
 You can also save your own at any time: `./lab save my-state` (for example after a test sets
 up a scenario), then `./lab up my-state`. Checkpoints chain as qcow2 backing files. `./lab list`
@@ -173,7 +173,7 @@ guests** (the build sandbox cannot run KVM guests).
 5. Finish provisioning, then run `./lab up && ./lab health --deep` 10× in a loop, timing it. Watch
    for cluster failovers after resume (`Get-ClusterLog`, AG role changes).
 6. Try `LAB_TIME_MODE=sync` once and check that Kerberos/cluster stay healthy after a big clock jump.
-7. Try `./lab save scenario-x` / `./lab up scenario-x` and a manual failover to SQL3 (cross-subnet).
+7. Try `./lab save scenario-x` / `./lab up scenario-x` and a planned failover to SQL3 (cross-subnet, async): `./lab failover SQL3` (sync first, then failover, no data loss).
 
 ## Known risks / open questions
 
@@ -222,7 +222,7 @@ The lab runs on any Linux host with KVM and Docker. `MAKE.md` section 1a selects
 - **GCP**: one Compute Engine VM per team member, with nested virtualization, made with Terraform
   (`deploy/gcp/terraform/{shared,vms}`), reached through IAP (no public IP), spot by default.
   A shared bucket holds the ISO, base image, and optionally the runtime image and checkpoints.
-  Workflow: build -> `./lab gcp finish VM` (TC1-TC7, then a golden disk snapshot, VM stopped) ->
+  Workflow: build -> `./lab gcp finish VM` (TC1-TC9, then a golden disk snapshot, VM stopped) ->
   delete VMs -> `./lab gcp spawn NAME` clones from the snapshot when needed (pd-balanced; the build VM uses pd-ssd), `./lab gcp destroy NAME`.
   Command: `./lab gcp help`. Procedure: `MAKE.md` section G.
 
