@@ -97,6 +97,8 @@ variable "vms" {
     disk_type        = optional(string)
     disk_size_gb     = optional(number)
     image            = optional(string)
+    source_snapshot  = optional(string) # clone: boot disk from this snapshot (repo, images, checkpoints included); overrides image
+    name             = optional(string) # exact GCE name instead of <name_prefix>-<key>
     cpu_model        = optional(string)
     spot             = optional(bool)
     publisher        = optional(bool, false)
