@@ -255,6 +255,8 @@ Do all these tests after provisioning. Record each result in the summary (sectio
 
 > **NOTE:** Publish times on n2-standard-16 with pd-ssd: ISO + base image + runtime image about 2 min. Checkpoints: archive about 2.5 min, hash about 2 min, upload about 3.5 min (22 GB compressed from 55 GB).
 
+> **NOTE:** Clone a built lab host: stop it, run `./lab gcp snapshot VM`, then add a `vms` entry with `source_snapshot` (and optionally `name`). The clone contains the repository, the runtime image, and the checkpoints. The first restore on a clone reads the snapshot blocks for the first time and can be slow, especially on `pd-standard`. Use `LAB_UP_TIMEOUT=900 ./lab up golden` for the first restore. Measured (n2-standard-16, pd-standard 300 GB): snapshot 277 s, VM create 93 s, SSH ready 28 s later, first restore more than 180 s (timed out), then 4.4 s; resets 2.2-2.7 s.
+
 > **NOTE:** Optional fast clone: `./lab gcp image VM` makes a custom image of a fully built lab host. Set `image` for a new VM to that image family. The checkpoints on the lab host stay the reset method (`./lab reset`).
 
 ### G7. Deploy the lab

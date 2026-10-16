@@ -62,6 +62,10 @@ if (( IO )); then
   r=$(dd if="$f" of=/dev/null bs=4M iflag=direct 2>&1 | awk '/copied/ {print $(NF-1), $NF}'); rm -f "$f"
   ok "write $w, read $r (pd-ssd 300 GB: about 140 MB/s; restores load 5-25 GB of RAM state)"
   case $r in *kB/s*|*" B/s"*) warn "disk read is very slow; restores will take minutes" ;; esac
+  rv=${r%% *}; rv=${rv%%.*}
+  if [[ $r == *MB/s* ]] && (( rv < 200 )); then
+    warn "disk read below 200 MB/s: the FIRST restore (cold page cache, or a disk made from a snapshot, which loads blocks on first read) can exceed 180 s. fix: LAB_UP_TIMEOUT=900 ./lab up golden"
+  fi
 fi
 
 echo "== bucket access (VM service account)"
