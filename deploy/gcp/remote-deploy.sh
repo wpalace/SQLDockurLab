@@ -16,6 +16,7 @@ if [[ -n ${LAB_GCP_CPU_MODEL:-} ]]; then
 fi
 step "fetch artifacts"; deploy/gcp/artifacts.sh fetch "$@"
 step "init";            ./lab init
+step "console gateway"; ./lab console >/dev/null || true   # noVNC on 6111-6115 for ./lab gcp tunnel
 if [[ ! -f images/base/disk.qcow2 ]]; then
   # A base build interrupted by preemption cannot continue safely (the guest scripts run once
   # per phase): start it again from an empty build disk.
