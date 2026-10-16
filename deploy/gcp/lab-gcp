@@ -56,7 +56,7 @@ VM lifecycle (gcloud):
   image VM [FAMILY]      make a custom image of the VM disk (fast clone path; VM is stopped)
 
 Golden snapshot and clones (MAKE.md G8-G10):
-  test VM                run TC1-TC7 on the VM (tests/run-tcs.sh); fails if any test fails
+  test VM                run TC1-TC9 on the VM (tests/run-tcs.sh); fails if any test fails
   golden VM [NAME]       only after a test pass: stop the VM, snapshot its disk as
                          sqlag-golden-YYYYMMDD-HHMM (labels kind=golden), record it as latest
   finish VM              test, then golden (the final build step)
@@ -249,7 +249,7 @@ wait_ready() {  # SSH works and the startup script finished on this boot
   done; die "$n: no SSH / startup script after 10 min (see /var/log/sql-ag-lab-startup.log)"
 }
 
-cmd_test() {  # run MAKE.md TC1-TC7 on the VM; exit 0 only if ALL pass
+cmd_test() {  # run MAKE.md TC1-TC9 on the VM; exit 0 only if ALL pass
   ctx; local n; n=$(vm_name "$1"); local t0=$SECONDS
   watch_gcp "$1"; note "tests started on $n"
   rcmd "$n" "cd $REMOTE_DIR && rm -f logs/tests.passed && setsid -f nohup tests/run-tcs.sh > logs/tests.log 2>&1 < /dev/null"

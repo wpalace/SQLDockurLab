@@ -39,6 +39,10 @@ Fast path (CI):
 Utilities:
   status                 containers + VM run states
   ssh VM [cmd]           PowerShell on a VM (DC1 SQL1 SQL2 SQL3 SQL4)
+  failover SQLn          planned AG failover without data loss (async target: sync first)
+  failover-modes MODES   set replica modes ("config" = LAB_AG_MODES), e.g.
+                         "SQL3:SYNCHRONOUS_COMMIT:AUTOMATIC SQL4:SYNCHRONOUS_COMMIT:AUTOMATIC"
+  kill VM                hard power-off of one VM (failover tests; ./lab up restores)
   console [VM|stop]      start noVNC gateway; print browser console URLs
   vnc [build|urls]       open noVNC consoles in the default browser (build = dockur :8006)
   info                   connection details (IPs, listener, credentials)
@@ -373,6 +377,13 @@ cmd_ssh() {
   local vm=${1:?usage: ./lab ssh VM [command]}; vm=${vm^^}
   if (( $# > 1 )); then gps "$vm" "${*:2}"; else ssh -t "${SSH_OPTS[@]}" "Administrator@$(vm_ip "$vm")"; fi
 }
+# AG helpers: guest/Invoke-LabFailover.ps1 runs on DC1 (neutral: it is not a replica).
+cmd_agtool() { gpush DC1 >/dev/null 2>&1 || true; grun DC1 Invoke-LabFailover.ps1 "$@"; }
+cmd_kill() {
+  local vm=${1:?usage: ./lab kill VM}; vm=${vm^^}
+  $DOCKER kill "$(vm_container "$vm")" >/dev/null || die "could not stop $vm"
+  ok "$vm powered off (QEMU killed). Restore: ./lab up"
+}
 cmd_console() {
   # ./lab console        -> start the noVNC gateway and print a browser URL per VM
   # ./lab console VM     -> just that VM's URL;  ./lab console stop -> remove the gateway
@@ -476,6 +487,10 @@ main() {
     health) cmd_health "$@" ;;
     status) cmd_status ;;
     ssh) cmd_ssh "$@" ;;
+    failover) cmd_agtool -Target "${1:?usage: ./lab failover SQLn}" ;;
+    failover-modes) cmd_agtool -SetModes "${1:?usage: ./lab failover-modes MODES|config}" ;;
+    agtool) cmd_agtool "$@" ;;
+    kill) cmd_kill "$@" ;;
     console) cmd_console "$@" ;;
     vnc) cmd_vnc "$@" ;;
     info) cmd_info ;;

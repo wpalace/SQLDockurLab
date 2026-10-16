@@ -43,6 +43,15 @@ prov_stage_ag() {
   parallel_vms agjoin _agjoin SQL2 SQL3 SQL4 || die "AG join failed"
   gstep SQL1 RunAs.ps1 Add-LabListener.ps1 || die "listener creation failed"
   grun SQL1 Test-Lab.ps1 -WaitSeconds 600 || die "lab is not healthy after provisioning"
+  if [[ ${LAB_FAILOVER_CHAIN:-1} == 1 ]]; then
+    # Validation before the golden checkpoint: planned failover to every replica and back.
+    local t=$SECONDS
+    log "failover chain SQL1 -> SQL2 -> SQL3 -> SQL4 -> SQL1 (heartbeat checks after each move)"
+    gpush DC1 >/dev/null
+    grun DC1 Invoke-LabFailover.ps1 -Chain SQL2,SQL3,SQL4,SQL1 || die "failover chain failed"
+    log "failover chain OK ($((SECONDS - t)) s)"
+    grun SQL1 Test-Lab.ps1 -WaitSeconds 600 || die "lab is not healthy after the failover chain"
+  fi
 }
 
 # Intermediate checkpoints give automation a choice of starting states:
