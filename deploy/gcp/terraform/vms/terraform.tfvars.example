@@ -18,7 +18,8 @@ vms = {
 # disk_type, disk_size_gb, image, cpu_model, spot, publisher).
 # default_machine_type     = "n2-standard-16"   # 16 vCPU / 64 GB; lab needs >= 9 vCPU / 24 GB
 # default_min_cpu_platform = "Intel Ice Lake"   # keep identical on VMs that share checkpoints
-# default_disk_type        = "pd-ssd"           # hyperdisk-balanced on N4/C3/C4
+# default_disk_type        = "pd-ssd"           # build VM (base image + lab build); hyperdisk-balanced on N4/C3/C4
+# default_spawned_disk_type = "pd-balanced"     # clones from ./lab gcp spawn
 # default_disk_size_gb     = 300
 # default_image            = "debian-cloud/debian-12"
 # default_cpu_model        = "host"

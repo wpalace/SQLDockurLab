@@ -61,7 +61,7 @@ Golden snapshot and clones (MAKE.md G8-G10):
   finish VM              test, then golden (the final build step)
   snapshots              list lab snapshots and the latest golden one
   use-snapshot NAME      record NAME as the latest golden snapshot
-  spawn NAME [--disk-type pd-ssd|pd-balanced|pd-standard] [--snapshot S] [--machine-type M] [--no-up]
+  spawn NAME [--disk-type pd-balanced(default)|pd-ssd|pd-standard] [--snapshot S] [--machine-type M] [--no-up]
                          new VM NAME from the latest golden snapshot (Terraform, spawned.auto.tfvars.json),
                          wait for SSH, check, first restore of golden (LAB_UP_TIMEOUT=1800), deep health
   destroy NAME [--yes]   delete a spawned VM and its disk (asks unless --yes; tfvars VMs are refused)
@@ -314,7 +314,7 @@ cmd_spawn() {  # spawn NAME [--disk-type T] [--snapshot S] [--machine-type M] [-
   entry=$(python3 -c 'import json,sys; o,s,d,m=sys.argv[1:5]; e={"owner":o,"source_snapshot":s,"publisher":False}
 d and e.update(disk_type=d); m and e.update(machine_type=m); print(json.dumps(e))' "$owner" "$snap" "$dtype" "$mtype")
   spawned_edit add "$name" "$entry"
-  note "spawn $name from $snap (disk ${dtype:-default})"
+  note "spawn $name from $snap (disk ${dtype:-pd-balanced default})"
   tf -chdir="$TF_VMS" apply -auto-approve -target="google_compute_instance.lab[\"$name\"]" || die "terraform apply failed (entry kept in $SPAWNED_JSON; fix and rerun, or ./lab gcp destroy $name)"
   local t1=$SECONDS; wait_ready "$name"; local t2=$SECONDS
   ok "$name created in $((t1 - t0)) s, SSH ready after $((t2 - t1)) s"
