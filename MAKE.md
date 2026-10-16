@@ -6,7 +6,7 @@ Read this file completely before you start. Do the procedures in sequence.
 
 1. Run all commands from the repository root (the directory that contains `lab`).
 2. Record a transcript in `TRANSCRIPT.md` at the repository root. See section 10.
-3. Write each time in Pacific Time (PT). Use the format `2026-10-15 09:15 PT`.
+3. Write each time in Pacific Time. Use the label `PT` for all dates, also in summer (PDT) and winter (PST). Use the format `2026-10-15 09:15 PT`. The lab logs use the local clock of the host. On a GCE lab host, the clock is UTC: convert those times to PT.
 4. Do not delete `images/` or `media/`, or anything in them, unless a procedure tells you to.
 5. Do not push the repository. Do not contact other people.
 6. Keep the progress log `logs/progress.log` (see step 3.0). Before and after each step, milestone, and failure, add one line: `./lab log "TEXT"`. The lab commands also write their own milestone lines to this log.
@@ -52,6 +52,8 @@ Read this file completely before you start. Do the procedures in sequence.
 > **NOTE:** If a step takes more than 2 times the duration in the table, start section 9.
 
 ## 3. Prerequisites and checks
+
+> **NOTE:** For the GCP target, steps 3.1 to 3.11 apply to the lab host, not to the workstation. `./lab gcp check VM` (G5) does these checks on the lab host. On the workstation, do only step 3.0 and G1.
 
 0. Do this first. Run `./lab log "START prerequisites"`. This makes the empty file `logs/progress.log` and adds one timestamped line. Make `TRANSCRIPT.md` (section 10). Then run `./lab watch`. This opens a live watch terminal that follows `logs/progress.log` and `TRANSCRIPT.md` (`tail -F`), so that the user can monitor progress without asking. Make sure that the terminal is open before you continue.
 
@@ -162,6 +164,25 @@ Do all these tests after provisioning. Record each result in the summary (sectio
 7. **TC7 Consoles.** Run `./lab vnc`. Expected: five tabs. Each tab title starts with `QEMU (`. If you cannot see the browser, run `./lab vnc urls` and `curl -s -o /dev/null -w '%{http_code}' URL` for each URL. Expected: `200`. Ask the user to confirm that the tabs show the VM screens.
 8. When all the tests are complete, run `./lab reset`. Leave the lab running at golden.
 
+## 7a. Connect with VS Code
+
+Use the VS Code extension `ms-mssql.mssql` (SQL Server). Windows authentication does not work from a Linux host that is not in the domain. Use SQL authentication.
+
+| Item | Value |
+|---|---|
+| Login | `sa` (setup uses `/SECURITYMODE=SQL`) |
+| Password | `LAB_PASSWORD` in `lab.env` |
+| Encrypt | Mandatory, with *Trust server certificate* (the lab uses self-signed certificates) |
+| Listener (local lab) | `10.50.0.60,1433` with `MultiSubnetFailover=True` (the host cannot resolve `LabAGL.lab.local`, so use the IP) |
+| SQL1-SQL4 (local lab) | `10.50.0.11`, `10.50.0.12`, `10.51.0.13`, `10.51.0.14` |
+| GCP lab host | Run `./lab gcp tunnel VM --sql`. Listener `127.0.0.1,14330`, SQL1-SQL4 `127.0.0.1,14331` to `14334`. Do not set `MultiSubnetFailover` for the tunnel. |
+
+1. Start the lab: `./lab up`.
+2. In VS Code, open the *SQL Server* view. Add a connection with the values above, or add entries to `mssql.connections` in the user `settings.json`.
+3. Connect and run `SELECT @@SERVERNAME`. On the listener, the result is the primary (SQL1 at golden).
+
+> **NOTE:** After `./lab reset`, the connections are closed. Connect again.
+
 ## 9. Recover from failures
 
 | Symptom | Cause | Action |
@@ -181,7 +202,7 @@ Do all these tests after provisioning. Record each result in the summary (sectio
 
 ## 10. Transcript and summary
 
-1. Make `TRANSCRIPT.md` before step 3.1.
+1. Make `TRANSCRIPT.md` before step 3.1. If `TRANSCRIPT.md` exists already (from an earlier build), do not delete it and do not write over it. Add a new section at the end, for example `## Build 2026-10-16 09:00 PT`, and write the new lines in that section.
 2. For each major step (sections 3, 4, 5, 6, 8), write one line when the step starts and one line when it ends. Write the same lines to the progress log with `./lab log`:
    `- 2026-10-15 09:20 PT START build-base` and
    `- 2026-10-15 10:02 PT END build-base (42 min, OK)`.
@@ -209,10 +230,10 @@ Do all these tests after provisioning. Record each result in the summary (sectio
 
 ### G2. Parameters
 
-1. Copy the examples:
-   `cp deploy/gcp/terraform/shared/terraform.tfvars.example deploy/gcp/terraform/shared/terraform.tfvars` and
-   `cp deploy/gcp/terraform/vms/terraform.tfvars.example deploy/gcp/terraform/vms/terraform.tfvars`.
-2. Tell the user to fill in each value marked `REQUIRED`: `project_id`, `bucket_name`, `team_members`, and the `vms` entries (`<owner>-<n>`).
+1. Copy the examples only if the files do not exist. Do not write over a `terraform.tfvars` that the user filled in:
+   `cp -n deploy/gcp/terraform/shared/terraform.tfvars.example deploy/gcp/terraform/shared/terraform.tfvars` and
+   `cp -n deploy/gcp/terraform/vms/terraform.tfvars.example deploy/gcp/terraform/vms/terraform.tfvars`.
+2. If the files existed already, show the values to the user and make sure that they are correct. Then tell the user to fill in each value marked `REQUIRED`: `project_id`, `bucket_name`, `team_members`, and the `vms` entries (`<owner>-<n>`).
 3. Make sure that the user agrees to the other values: region and zone, machine type, disk size and type, spot, `public_ip`.
 4. Optional: to share Terraform state with the team, copy `backend.tf.example` to `backend.tf` in each root and set the state bucket.
 
@@ -226,15 +247,17 @@ Do all these tests after provisioning. Record each result in the summary (sectio
 2. Run `./lab gcp plan shared`. Show the plan to the user.
 3. Run `./lab gcp apply shared`. This makes the VPC, the subnet, Cloud NAT, the IAP SSH firewall rule, two service accounts (read and publish), and the artifact bucket.
 
+> **NOTE:** `apply` shows the plan and asks `Enter a value:`. Type `yes`. An agent without an interactive terminal must get approval from the user first, and then use `./lab gcp apply shared --yes` (or `vms --yes`). `--yes` adds `-auto-approve`.
+
 > **NOTE:** If the shared root exists already (another team member applied it), skip G3.
 
 ### G4. Lab host VM
 
 1. Run `./lab gcp init vms`.
 2. Run `./lab gcp plan vms`. Show the plan to the user.
-3. Run `./lab gcp apply vms`.
+3. Run `./lab gcp apply vms` (an agent: `./lab gcp apply vms --yes`, after approval).
 4. Run `./lab gcp list`. The VM must show `RUNNING` and `NESTED True`.
-5. Wait 5 min. The startup script installs Docker.
+5. Do not wait for a fixed time. The startup script installs Docker (2-5 min). Go to G5: `./lab gcp check VM` shows `startup script has not completed` until it is complete. If it shows that line, wait 1 min and run the check again.
 
 ### G5. Verify the lab host (do not skip)
 
@@ -250,7 +273,7 @@ Do all these tests after provisioning. Record each result in the summary (sectio
 
 1. Run `./lab gcp artifacts VM`. This shows what the bucket has.
 2. If the bucket has the ISO and the base image, the deploy (G7) downloads them and does not build them.
-3. After the first complete build, publish the artifacts from a VM with `publisher = true`:
+3. After the first complete build, publish (step G8.5) the artifacts from a VM with `publisher = true`:
    `./lab gcp publish VM iso base key` and optionally `./lab gcp publish VM image checkpoints` (run `./lab down` on the lab host first).
 
 > **CAUTION:** Memory checkpoints restore only on a lab host with the same runtime image, the same `LAB_CPU_MODEL`, and the same `lab.env`. Use the same machine type and minimum CPU platform on all VMs that share checkpoints. With `cpu_model = "host"`, a different CPU generation makes the restore fail. The fetch step compares fingerprints and skips checkpoints that do not agree.
@@ -267,6 +290,7 @@ Do all these tests after provisioning. Record each result in the summary (sectio
 2. Run `./lab gcp deploy VM` (add `--checkpoints` to use published checkpoints).
 3. Give the console URLs that the tunnel prints to the user: `http://127.0.0.1:8006` (base build), `http://127.0.0.1:6111` to `6115` (DC1, SQL1-SQL4). If a local lab uses these ports on the workstation, the tunnel adds 10000 (`18006`, `16111` to `16115`). Use the URLs that the tunnel prints.
 4. Make sure that the live watch terminal is open on the workstation. `./lab gcp deploy` and `./lab gcp publish` open it by themselves. It follows the progress log and the deploy log on the lab host (through IAP SSH, with automatic reconnect) and the local `TRANSCRIPT.md`. If it is not open, run `./lab gcp watch-term VM`. The deploy is complete when the log shows `DEPLOY COMPLETE`.
+4a. To see the VM screens, open the console URLs (step 3) in a browser on the workstation, for example `xdg-open http://127.0.0.1:6111`. Open `8006` during the base build, and `6111` to `6115` when `provision.log` shows `waiting for all VMs`. Tell the user which URLs are open.
 5. For SQL access from the workstation, run `./lab gcp tunnel VM --sql`. Connect to `127.0.0.1,14330` (listener) or `127.0.0.1,14331` to `14334` (SQL1-SQL4).
 
 > **NOTE:** The networks 10.50.0.0/24 and 10.51.0.0/24 exist only on the lab host. Use the port forwards, or `--socks PORT` for a SOCKS proxy.
@@ -280,7 +304,12 @@ Do all these tests after provisioning. Record each result in the summary (sectio
 1. Run `./lab gcp test VM`. This runs the test cases TC1 to TC7 (section 8) on the lab host with `tests/run-tcs.sh`. The live watch terminal opens.
 2. The output must end with `all tests passed on VM`. The output shows one `RESULT` line with `PASS` or `FAIL` and the duration for each test.
 3. Record the results in `TRANSCRIPT.md` (section 10).
-4. If a test fails, go to section 9. Do not do G9.
+4. If a test fails, go to section 9. Do not do G9. You can run `./lab gcp test VM` again: TC2 removes the old files in `/tmp/sql-ag-lab-e2e` at start and at end.
+5. **Publish (do this step after the first complete build, before G9).** The VM must have `publisher = true`. Run `./lab gcp ssh VM "cd sql-ag-lab && ./lab down"`. Then run `./lab gcp publish VM iso base key` and `./lab gcp publish VM image checkpoints`. Run `./lab gcp artifacts VM`. The output must show `iso` (or `iso-media`), `base`, `key`, `image`, and `checkpoints`. Skip this step if the bucket has these items with the same fingerprint already.
+
+> **NOTE:** There are two fingerprints. They have different functions:
+> - The *checkpoint fingerprint* (`FINGERPRINT=` in `images/checkpoints/golden/meta.env`, snapshot label `fp`) identifies the runtime image, `LAB_CPU_MODEL`, and `lab.env` that saved the checkpoints. A restore needs the same value.
+> - The *host fingerprint* (`meta` column in `./lab gcp artifacts VM`) shows the machine type and CPU of the VM that published an item. `fetch` downloads checkpoints only when the checkpoint fingerprint agrees.
 
 ### G9. Golden snapshot (final build step)
 
@@ -291,7 +320,7 @@ Do all these tests after provisioning. Record each result in the summary (sectio
    - Makes the snapshot `sqlag-golden-YYYYMMDD-HHMM` with the labels `kind=golden`, `source`, `fp` (checkpoint fingerprint), and `commit`.
    - Records the snapshot as the latest golden snapshot in `deploy/gcp/state/golden-snapshot` (not committed).
    - Adds a line to `logs/progress.log` and to `TRANSCRIPT.md`.
-3. Run `./lab gcp list`. The lab host must show `TERMINATED`.
+3. Run `./lab gcp list`. The lab host must show `TERMINATED`. `golden` stops the lab host, so G11 step 1 is not necessary after G9.
 4. Run `./lab gcp snapshots`. The new snapshot must show as latest.
 
 > **NOTE:** `./lab gcp finish VM` does G8 and G9 in one command. It makes no snapshot if a test fails.
@@ -320,7 +349,7 @@ Do all these tests after provisioning. Record each result in the summary (sectio
 
 ### G11. Stop the lab host
 
-1. Run `./lab gcp stop VM` when you finish. Compute charges stop. Disk charges continue.
+1. If you did G9, the lab host is stopped already. Otherwise run `./lab gcp stop VM` when you finish. Compute charges stop. Disk charges continue.
 2. Run `./lab gcp cost` to show the estimate to the user.
 3. To delete a VM from `terraform.tfvars`, run `./lab gcp delete KEY`. Get approval from the user first.
 

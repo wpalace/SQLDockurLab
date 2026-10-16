@@ -68,9 +68,17 @@ pub_checkpoints() {
 }
 
 cmd_status() {
-  get_manifest; [[ -s $MAN ]] || { warn "no artifacts in $PREFIX"; return 0; }
-  printf '%-12s %10s  %-18s %s\n' ITEM MiB SHA256 META
-  awk -F'\t' '{printf "%-12s %10d  %-18s %s\n", $1, $4/1048576, substr($3,1,16), $5}' "$MAN"
+  get_manifest
+  if [[ -s $MAN ]]; then
+    printf '%-12s %10s  %-18s %s\n' ITEM MiB SHA256 META
+    awk -F'\t' '{printf "%-12s %10d  %-18s %s\n", $1, $4/1048576, substr($3,1,16), $5}' "$MAN"
+  else warn "no manifest entries in $PREFIX"; fi
+  # media/ objects are used by fetch even without a manifest entry (checked with the known SHA-256)
+  if [[ -z $(man_field iso 2) ]]; then
+    local sz; sz=$(gcloud storage ls -l "$PREFIX/media/$LAB_SQL_ISO" 2>/dev/null | awk 'NR==1{print $1}')
+    [[ -n $sz ]] && printf '%-12s %10d  %-18s %s\n' iso-media $((sz/1048576)) "${SQL_ISO_SHA256:0:16}" "media/$LAB_SQL_ISO (no manifest entry; fetch verifies the known SHA-256)"
+  fi
+  return 0
 }
 
 cmd_fetch() {
