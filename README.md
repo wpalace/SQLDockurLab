@@ -220,7 +220,7 @@ The lab runs on any Linux host with KVM and Docker. `MAKE.md` section 1a selects
 
 - **Local**: this computer (sections 3-10).
 - **GCP**: one Compute Engine VM per team member, with nested virtualization, made with Terraform
-  (`deploy/gcp/terraform/{shared,vms}`), reached through IAP (no public IP), spot by default.
+  (`deploy/gcp/terraform/{shared,vms}`), reached through IAP (no public IP), spot and Shielded VM (Secure Boot, vTPM, integrity monitoring) by default.
   A shared bucket holds the ISO, base image, and optionally the runtime image and checkpoints.
   Workflow: build -> `./lab gcp finish VM` (TC1-TC9, then a golden disk snapshot, VM stopped) ->
   delete VMs -> `./lab gcp spawn NAME` clones from the snapshot when needed (pd-balanced; the build VM uses pd-ssd), `./lab gcp destroy NAME`.
