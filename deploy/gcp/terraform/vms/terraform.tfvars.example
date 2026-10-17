@@ -15,7 +15,7 @@ vms = {
 }
 
 # Defaults for all VMs (each entry above can override machine_type, min_cpu_platform,
-# disk_type, disk_size_gb, image, cpu_model, spot, publisher).
+# disk_type, disk_size_gb, image, cpu_model, spot, publisher, shielded_vm).
 # default_machine_type     = "n2-standard-16"   # 16 vCPU / 64 GB; lab needs >= 9 vCPU / 24 GB
 # default_min_cpu_platform = "Intel Ice Lake"   # keep identical on VMs that share checkpoints
 # default_disk_type        = "pd-ssd"           # build VM (base image + lab build); hyperdisk-balanced on N4/C3/C4
@@ -26,3 +26,8 @@ vms = {
 # default_spot             = true               # spot: cheap, may be preempted (VM stops, disk kept)
 # public_ip                = false              # IAP only
 # timezone                 = "UTC"              # e.g. "America/Los_Angeles" for PT log times
+# shielded_vm = {                              # Shielded VM, all true by default (host boot only; nested KVM unaffected)
+#   enable_secure_boot          = true
+#   enable_vtpm                 = true
+#   enable_integrity_monitoring = true          # needs enable_vtpm
+# }
