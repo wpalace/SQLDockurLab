@@ -231,12 +231,51 @@ Use the VS Code extension `ms-mssql.mssql` (SQL Server). Windows authentication 
 
 > **CAUTION:** The GCP target makes resources that cost money. Get approval from the user before each `apply`, `create`, and `deploy`. Stop the lab host when you finish (G9).
 
+### G0. Select the workstation front end
+
+You can operate the GCP target from Linux, macOS, or Windows. Windows does not need WSL.
+
+| Workstation | Front end | Command form |
+|---|---|---|
+| Linux, macOS (bash) | `lab` (bash) | `./lab gcp COMMAND` |
+| Windows, Linux, macOS (PowerShell 7) | `lab.ps1` | `./lab.ps1 gcp COMMAND` |
+
+The two front ends have the same commands and options. In this section, `./lab gcp` means the front end that you use. On Windows, write `.\lab.ps1 gcp` in place of `./lab gcp`.
+
+> **NOTE:** The lab host is always Linux. On the lab host, the scripts stay bash (`./lab`, `remote-deploy.sh`, `vm-check.sh`, `artifacts.sh`). `lab.ps1` starts them through IAP SSH.
+
+#### G0.1 Windows workstation (no WSL)
+
+1. Install the tools. Open PowerShell and run:
+   ```powershell
+   winget install --id Microsoft.PowerShell -e
+   winget install --id Google.CloudSDK -e
+   winget install --id Hashicorp.Terraform -e
+   winget install --id Git.Git -e
+   ```
+2. Close the window. Open PowerShell 7 (`pwsh`). Make sure that `pwsh`, `gcloud`, `terraform`, and `git` are found: `Get-Command pwsh, gcloud, terraform, git`.
+3. Clone the repository with LF line ends: `git clone -c core.autocrlf=false URL`. The file `.gitattributes` also keeps the scripts for the lab host in LF.
+4. If PowerShell does not run the script, run `Set-ExecutionPolicy -Scope CurrentUser RemoteSigned` one time.
+5. Go to the repository directory. Run `.\lab.ps1 gcp tools`. The output must end with `operator tools ready`.
+6. Optional: install Windows Terminal (`winget install --id Microsoft.WindowsTerminal -e`). The live watch terminal opens there. Without it, the watch terminal opens in a new `pwsh` window.
+
+> **NOTE:** On Windows, `gcloud compute ssh` uses PuTTY (`plink`, `pscp`). gcloud installs these tools and makes the SSH key in `%USERPROFILE%\.ssh\google_compute_engine.ppk` at the first connection. `./lab.ps1 gcp tunnel` uses SSH port forwarding through IAP for the console ports, `--sql`, and `--socks`.
+
+> **NOTE:** `./lab.ps1 gcp console VM` makes the tunnel and opens the console URLs in the default browser.
+
+> **NOTE:** `./lab.ps1 log TEXT` and `./lab.ps1 watch` do the same as `./lab log TEXT` and `./lab watch` (section 3.0) on the workstation. The other local lab commands (`./lab up`, `./lab provision`, and so on) need a Linux host with KVM. On GCP, they run on the lab host.
+
+#### G0.2 Linux or macOS workstation
+
+Use `./lab gcp` (bash), or install PowerShell 7 and use `./lab.ps1 gcp`. Install the Google Cloud CLI, Terraform 1.5 or later, and Git with the package manager of the system.
+
 ### G1. Workstation prerequisites
 
 1. Make sure that the workstation has the Google Cloud CLI. Run `gcloud version`.
 2. Make sure that the workstation has Terraform 1.5 or later. Run `terraform version`.
 3. Tell the user to sign in: `gcloud auth login` and `gcloud auth application-default login`.
 4. Run `./lab gcp tf-check`. The output must show `Success!` two times.
+5. PowerShell front end only: run `./lab.ps1 gcp tools`. The output must end with `operator tools ready`.
 
 ### G2. Parameters
 

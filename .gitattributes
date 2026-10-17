@@ -1,0 +1,21 @@
+# Line endings: keep everything that runs on Linux (lab host, containers, guests via scp) LF in
+# every checkout, also on Windows with core.autocrlf=true. PowerShell accepts LF and CRLF.
+* text=auto eol=lf
+*.sh text eol=lf
+lab text eol=lf
+deploy/gcp/lab-gcp text eol=lf
+*.py text eol=lf
+*.yml text eol=lf
+*.tf text eol=lf
+*.tfvars* text eol=lf
+*.env text eol=lf
+*.xml text eol=lf
+*.md text eol=lf
+*.ps1 text eol=lf
+*.psm1 text eol=lf
+*.cmd text eol=crlf
+*.bat text eol=crlf
+*.iso binary
+*.qcow2 binary
+*.png binary
+*.jpg binary
