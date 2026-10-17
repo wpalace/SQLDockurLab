@@ -65,12 +65,13 @@ sm_fail() { # stderr-file action
     die "secret $KEY_SECRET (or a version of it) not found: run ./lab gcp apply shared, then ./lab gcp key push VM from the host that built the base image"
   else cat "$1" >&2; die "Secret Manager: $2 $KEY_SECRET failed"; fi
 }
-key_latest() { # -> file with the latest key version (mode 600); returns the version number on stdout
-  local err="$TMP/sm.err" ver
-  ver=$(gcloud secrets versions describe latest --secret "$KEY_SECRET" --format='value(name.basename())' 2>"$err") || sm_fail "$err" read
-  ( umask 077; gcloud secrets versions access "$ver" --secret "$KEY_SECRET" > "$1" 2>"$err" ) || { rm -f "$1"; sm_fail "$err" read; }
-  [[ -s $1 ]] && grep -q 'PRIVATE KEY' "$1" || { rm -f "$1"; die "secret $KEY_SECRET version $ver is not an SSH private key"; }
-  echo "$ver"
+key_latest() { # FILE: write the latest key version (mode 600); prints "latest"
+  # roles/secretmanager.secretAccessor allows only versions.access (not versions.get/list), so
+  # the version number is not read here; the manifest line "key" names the published version.
+  local err="$TMP/sm.err"
+  ( umask 077; gcloud secrets versions access latest --secret "$KEY_SECRET" > "$1" 2>"$err" ) || { rm -f "$1"; sm_fail "$err" read; }
+  [[ -s $1 ]] && grep -q 'PRIVATE KEY' "$1" || { rm -f "$1"; die "the latest version of secret $KEY_SECRET is not an SSH private key"; }
+  echo latest
 }
 pub_key() {
   [[ -f $SSH_KEY ]] || die "no lab SSH key at $SSH_KEY (./lab init makes it; build-base bakes its public key into the base image)"
