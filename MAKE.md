@@ -286,7 +286,7 @@ Use `./lab gcp` (bash), or install PowerShell 7 and use `./lab.ps1 gcp`. Install
 3. Make sure that the user agrees to the other values: region and zone, machine type, disk size and type, spot, `public_ip`.
 4. Optional: to share Terraform state with the team, copy `backend.tf.example` to `backend.tf` in each root and set the state bucket.
 
-> **NOTE:** Defaults: `n2-standard-16` (16 vCPU, 64 GB), `Intel Ice Lake`, `pd-ssd` 300 GB, Debian 12 image, spot, no public IP. Nested virtualization works on Intel machine series (N1, N2, N4, C2, C3, C4) and on AMD N4D only. It does not work on E2, Arm, other AMD, or memory-optimized series. N4, C3, and C4 need `hyperdisk-balanced`.
+> **NOTE:** Defaults: `n2-standard-16` (16 vCPU, 64 GB), `Intel Ice Lake`, `pd-ssd` 300 GB, Debian 12 image, spot, no public IP, Shielded VM (Secure Boot, vTPM, integrity monitoring; variable `shielded_vm`, per VM `shielded_vm = false`). Shielded VM covers only the host Debian boot, not the nested lab VMs. Nested virtualization works on Intel machine series (N1, N2, N4, C2, C3, C4) and on AMD N4D only. It does not work on E2, Arm, other AMD, or memory-optimized series. N4, C3, and C4 need `hyperdisk-balanced`.
 
 > **NOTE:** The `terraform.tfvars` files, `backend.tf`, and the state are not committed (`.gitignore`).
 

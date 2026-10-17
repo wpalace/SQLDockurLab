@@ -5,12 +5,12 @@ locals {
     { for k, v in var.vms : k => {
       name      = v.name, owner = v.owner, machine_type = v.machine_type, min_cpu_platform = v.min_cpu_platform,
       disk_type = v.disk_type, disk_size_gb = v.disk_size_gb, image = v.image, source_snapshot = v.source_snapshot,
-      cpu_model = v.cpu_model, spot = v.spot, publisher = v.publisher, spawned = false
+      cpu_model = v.cpu_model, spot = v.spot, publisher = v.publisher, shielded_vm = v.shielded_vm, spawned = false
     } },
     { for k, v in var.spawned : k => {
       name      = k, owner = v.owner, machine_type = v.machine_type, min_cpu_platform = v.min_cpu_platform,
       disk_type = v.disk_type, disk_size_gb = v.disk_size_gb, image = null, source_snapshot = v.source_snapshot,
-      cpu_model = v.cpu_model, spot = v.spot, publisher = v.publisher, spawned = true
+      cpu_model = v.cpu_model, spot = v.spot, publisher = v.publisher, shielded_vm = v.shielded_vm, spawned = true
     } },
   )
   vms = { for k, v in local.all_vms : k => {
@@ -25,6 +25,7 @@ locals {
     cpu_model        = coalesce(v.cpu_model, var.default_cpu_model)
     spot             = coalesce(v.spot, var.default_spot)
     publisher        = v.publisher
+    shielded_vm      = coalesce(v.shielded_vm, true)
     spawned          = v.spawned
   } }
 }
@@ -58,6 +59,15 @@ resource "google_compute_instance" "lab" {
   # KVM inside the VM: the whole lab depends on this.
   advanced_machine_features {
     enable_nested_virtualization = true
+  }
+
+  # Shielded VM: Secure Boot, vTPM and integrity monitoring of the host (Debian) boot.
+  # It does not affect nested KVM: the lab VMs inside run on QEMU's own firmware.
+  # A VM entry with shielded_vm = false turns all three off (for example a custom image without UEFI).
+  shielded_instance_config {
+    enable_secure_boot          = each.value.shielded_vm && var.shielded_vm.enable_secure_boot
+    enable_vtpm                 = each.value.shielded_vm && var.shielded_vm.enable_vtpm
+    enable_integrity_monitoring = each.value.shielded_vm && var.shielded_vm.enable_integrity_monitoring
   }
 
   boot_disk {
