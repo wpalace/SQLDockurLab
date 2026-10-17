@@ -54,6 +54,11 @@ Describe 'apply flags' {
         $script:tf | Should -Be @('apply', 'vms')
     }
     It 'rejects an unknown command' { { Invoke-LabGcp -Argv @('nonsense') 6>$null } | Should -Throw '*unknown command*' }
+    It 'passes console options to tunnel and adds --open' {
+        Mock Invoke-Tunnel { param($key, $Rest) $script:tun = @($key) + $Rest }
+        Invoke-LabGcp -Argv @('console', 'bill-1', '--offset', '20000')
+        $script:tun | Should -Be @('bill-1', '--offset', '20000', '--open')
+    }
     It 'needs a VM for check' { { Invoke-LabGcp -Argv @('check') } | Should -Throw '*VM required*' }
 }
 
@@ -99,7 +104,7 @@ Describe 'watch terminal script' {
 }
 
 Describe 'repository line endings' {
-    It 'checks out scripts for Linux with LF' {
+    It 'checks out scripts for Linux with LF' -Skip:(-not (Get-Command git -ErrorAction SilentlyContinue)) {
         $attr = git -C $script:Repo check-attr eol -- lab deploy/gcp/remote-deploy.sh deploy/gcp/vm-check.sh lib/common.sh
         $attr | ForEach-Object { $_ | Should -Match 'eol: lf$' }
     }

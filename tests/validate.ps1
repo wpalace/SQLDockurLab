@@ -12,12 +12,15 @@ foreach ($f in $files) {
     $e = $null; [void][Management.Automation.Language.Parser]::ParseFile((Join-Path $repo $f), [ref]$null, [ref]$e)
     if ($e) { $e | ForEach-Object { Write-Host "$f`:$($_.Extent.StartLineNumber) $($_.Message)" }; $rc = 1 }
 }
-foreach ($m in @(@('PSScriptAnalyzer', '1.21.0'), @('Pester', '5.5.0'))) {
-    if (-not (Get-Module -ListAvailable $m[0] | Where-Object { $_.Version -ge [version]$m[1] })) {
+# PSScriptAnalyzer 1.24+ needs PowerShell 7.4.6+; older pwsh (for example the container image) gets 1.23.0.
+$psaMax = if ($PSVersionTable.PSVersion -lt [version]'7.4.6') { '1.23.0' } else { '99.0' }
+foreach ($m in @(@('PSScriptAnalyzer', '1.21.0', $psaMax), @('Pester', '5.5.0', '99.0'))) {
+    if (-not (Get-Module -ListAvailable $m[0] | Where-Object { $_.Version -ge [version]$m[1] -and $_.Version -le [version]$m[2] })) {
         Write-Host "   installing $($m[0]) for the current user"
-        Install-Module $m[0] -MinimumVersion $m[1] -Scope CurrentUser -Force -SkipPublisherCheck
+        Install-Module $m[0] -MinimumVersion $m[1] -MaximumVersion $m[2] -Scope CurrentUser -Force -SkipPublisherCheck
     }
 }
+Import-Module PSScriptAnalyzer -MaximumVersion $psaMax
 Write-Host '== PSScriptAnalyzer (Error + Warning)'
 # Excluded: Write-Host is the console UI here; the Invoke-*/Set-* verbs run commands, ShouldProcess adds nothing.
 $ex = @('PSAvoidUsingWriteHost', 'PSUseShouldProcessForStateChangingFunctions', 'PSUseSingularNouns', 'PSUseApprovedVerbs', 'PSUseBOMForUnicodeEncodedFile', 'PSAvoidGlobalVars')
