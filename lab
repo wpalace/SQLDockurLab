@@ -463,6 +463,7 @@ main() {
     gcp) exec "$LAB_ROOT/deploy/gcp/lab-gcp" "$@" ;;   # deployment target: Google Cloud
   esac
   load_env
+  case $cmd in log|watch|doctor|help) ;; *) check_password ;; esac   # fail fast: LAB_PASSWORD set and complex
   case $cmd in build-base|provision|build|up|down|reset|save|delete|init)
     plog "START ./lab $cmd $*"
     # shellcheck disable=SC2064

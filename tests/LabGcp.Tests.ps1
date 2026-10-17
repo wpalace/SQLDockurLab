@@ -109,3 +109,27 @@ Describe 'repository line endings' {
         $attr | ForEach-Object { $_ | Should -Match 'eol: lf$' }
     }
 }
+
+Describe 'LAB_PASSWORD rules (same as lib/password.sh)' {
+    It 'refuses <p>' -ForEach @(
+        @{ p = '' }, @{ p = '<change me>' }, @{ p = 'Ab1!' }, @{ p = 'abcdefgh1' }, @{ p = 'Abc def1!' },
+        @{ p = "Abcdef1'x" }, @{ p = 'Abcd$ef12' }, @{ p = 'MyAdministrator1!' }
+    ) { Get-LabPasswordProblem $p | Should -Not -BeNullOrEmpty }
+    It 'accepts <p>' -ForEach @(@{ p = 'Lab-Passw0rd' }, @{ p = 'abcdefg1!' }, @{ p = 'ABCDEFG1!' }, @{ p = 'Pa#ssw0rd!2026' }) {
+        Get-LabPasswordProblem $p | Should -BeNullOrEmpty
+    }
+}
+
+Describe 'key command' {
+    It 'runs artifacts.sh key on the VM' {
+        Mock Set-Ctx { $script:Project = 'p'; $script:Zone = 'z'; $script:Prefix = 'sqlag' }
+        Mock Get-VmName { 'sqlag-bill-1' }
+        Mock Invoke-Rcmd { param($n, $Command) $script:rc = "$n|$Command" }
+        Invoke-Key @('fetch', 'bill-1', '--force')
+        $script:rc | Should -Be 'sqlag-bill-1|cd sql-ag-lab && deploy/gcp/artifacts.sh key fetch --force'
+    }
+    It 'refuses an unknown action' {
+        Mock Set-Ctx { }
+        { Invoke-Key @('rotate') } | Should -Throw '*usage: key*'
+    }
+}

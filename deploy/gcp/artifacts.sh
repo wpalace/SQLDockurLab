@@ -3,10 +3,13 @@
 #   artifacts.sh status                  show the bucket manifest
 #   artifacts.sh fetch [--checkpoints]   download what exists (verify SHA-256), skip what is present
 #   artifacts.sh publish ITEM...         upload: iso base key image checkpoints (or: all)
+#   artifacts.sh key push|fetch|check    lab SSH key <-> Secret Manager (check: same as the latest version?)
 # Bucket layout (gs://BUCKET/sql-ag-lab/):
 #   manifest.tsv                         one line per item: name  object  sha256  bytes  meta
-#   media/<iso>  base/disk.qcow2  secrets/lab-ssh.tar  runtime/vm-image.tar.zst
+#   media/<iso>  base/disk.qcow2  runtime/vm-image.tar.zst
 #   checkpoints/checkpoints.tar.zst      all checkpoints (they form a chain on top of base)
+# The lab SSH private key is NOT in the bucket: it is the Secret Manager secret sqlag-lab-ssh-key
+# (manifest line "key" = secretmanager:SECRET/VERSION and the SHA-256 of the private key file).
 # The VM service account reads; only publisher VMs (or publishers' own credentials) can write.
 set -Eeuo pipefail
 LAB_ROOT=$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)
@@ -18,6 +21,7 @@ load_env
 [[ -f /etc/sql-ag-lab/gcp.env ]] && source /etc/sql-ag-lab/gcp.env
 BUCKET=${LAB_GCP_BUCKET:?no bucket: /etc/sql-ag-lab/gcp.env missing (startup script) and LAB_GCP_BUCKET unset}
 PREFIX="gs://$BUCKET/sql-ag-lab"
+KEY_SECRET=${LAB_GCP_KEY_SECRET:-sqlag-lab-ssh-key}
 SQL_ISO_URL=https://download.microsoft.com/download/dea8c210-c44a-4a9d-9d80-0c81578860c5/ENU/SQLServer2025-x64-ENU-EntDev.iso
 SQL_ISO_SHA256=f78f869d44e8c2cbf93be16ce6ea52dd811636f046ded29e7a74dd1352134851
 TMP="$LAB_IMAGES_DIR/.artifacts-tmp"; mkdir -p "$TMP"
@@ -50,7 +54,50 @@ download() { # name localfile -> 0 when fetched+verified, 1 when absent in bucke
 
 pub_iso() { upload iso "$LAB_MEDIA_DIR/$LAB_SQL_ISO" "media/$LAB_SQL_ISO"; }
 pub_base() { upload base "$LAB_IMAGES_DIR/base/disk.qcow2" base/disk.qcow2; }
-pub_key() { tar -C "$LAB_ROOT" -cf "$TMP/lab-ssh.tar" secrets/id_ed25519 secrets/id_ed25519.pub; upload key "$TMP/lab-ssh.tar" secrets/lab-ssh.tar; }
+# ------------------------------------------------------- lab SSH key (Secret Manager) --
+sm_account() { gcloud config get account 2>/dev/null || echo "the VM service account"; }
+sm_fail() { # stderr-file action
+  if grep -qiE 'PERMISSION_DENIED|403|does not have permission' "$1"; then
+    die "no permission to $2 secret $KEY_SECRET as $(sm_account). Grant it in deploy/gcp/terraform/shared/terraform.tfvars, then ./lab gcp apply shared --yes:
+      read (roles/secretmanager.secretAccessor): VM service accounts and team_members have it; add other principals to lab_key_readers
+      add versions (roles/secretmanager.secretVersionAdder): publisher VMs and publishers"
+  elif grep -qiE 'NOT_FOUND|not found' "$1"; then
+    die "secret $KEY_SECRET (or a version of it) not found: run ./lab gcp apply shared, then ./lab gcp key push VM from the host that built the base image"
+  else cat "$1" >&2; die "Secret Manager: $2 $KEY_SECRET failed"; fi
+}
+key_latest() { # -> file with the latest key version (mode 600); returns the version number on stdout
+  local err="$TMP/sm.err" ver
+  ver=$(gcloud secrets versions describe latest --secret "$KEY_SECRET" --format='value(name.basename())' 2>"$err") || sm_fail "$err" read
+  ( umask 077; gcloud secrets versions access "$ver" --secret "$KEY_SECRET" > "$1" 2>"$err" ) || { rm -f "$1"; sm_fail "$err" read; }
+  [[ -s $1 ]] && grep -q 'PRIVATE KEY' "$1" || { rm -f "$1"; die "secret $KEY_SECRET version $ver is not an SSH private key"; }
+  echo "$ver"
+}
+pub_key() {
+  [[ -f $SSH_KEY ]] || die "no lab SSH key at $SSH_KEY (./lab init makes it; build-base bakes its public key into the base image)"
+  local err="$TMP/sm.err" ver sha
+  ver=$(gcloud secrets versions add "$KEY_SECRET" --data-file="$SSH_KEY" --format='value(name.basename())' 2>"$err") || sm_fail "$err" "add a version to"
+  sha=$(sha256sum "$SSH_KEY" | cut -d' ' -f1)
+  put_manifest_line key "secretmanager:$KEY_SECRET/$ver" "$sha" "$(stat -c %s "$SSH_KEY")" "$(host_meta)"
+  ok "lab SSH key published: secret $KEY_SECRET version $ver (sha256=${sha:0:16})"
+}
+fetch_key() { # [--force]: write secrets/id_ed25519(.pub) from the latest version
+  local f="$TMP/id_ed25519.sm" ver; ver=$(key_latest "$f")
+  if [[ -f $SSH_KEY ]] && ! cmp -s "$f" "$SSH_KEY"; then
+    [[ ${1:-} == --force ]] || { rm -f "$f"; die "the local lab key $SSH_KEY differs from secret $KEY_SECRET version $ver. The base image, checkpoints and golden snapshots accept only the key they were built with. Use --force to replace the local key"; }
+    warn "replacing the local lab key with secret $KEY_SECRET version $ver (--force)"
+  fi
+  mkdir -p "$(dirname "$SSH_KEY")"; install -m 600 "$f" "$SSH_KEY"; rm -f "$f"
+  ssh-keygen -y -f "$SSH_KEY" > "$SSH_KEY.pub"; chmod 644 "$SSH_KEY.pub"
+  local want; get_manifest; want=$(man_field key 3)
+  [[ -z $want || $want == "$(sha256sum "$SSH_KEY" | cut -d' ' -f1)" ]] || warn "the key differs from the manifest entry (published from another host?)"
+  ok "lab SSH key from Secret Manager: $KEY_SECRET version $ver"
+}
+check_key() {
+  local f="$TMP/id_ed25519.sm" ver; ver=$(key_latest "$f")
+  [[ -f $SSH_KEY ]] || { rm -f "$f"; die "no local lab key: ./lab gcp fetch VM (or artifacts.sh key fetch)"; }
+  if cmp -s "$f" "$SSH_KEY"; then rm -f "$f"; ok "local lab key = secret $KEY_SECRET version $ver"
+  else rm -f "$f"; die "local lab key differs from secret $KEY_SECRET version $ver"; fi
+}
 pub_image() { log "saving runtime image $LAB_IMAGE"; $DOCKER save "$LAB_IMAGE" | zstd -q -T0 -3 -f -o "$TMP/vm-image.tar.zst"; upload image "$TMP/vm-image.tar.zst" runtime/vm-image.tar.zst; }
 pub_checkpoints() {
   [[ -z "$($DOCKER ps -q -f name='^lab-sql1$')" ]] || die "run ./lab down first (checkpoints must not change while archived)"
@@ -100,8 +147,8 @@ cmd_fetch() {
   fi
   # The base image has the lab SSH key baked in: take both or neither.
   if [[ -f "$LAB_IMAGES_DIR/base/disk.qcow2" ]]; then ok "base image present"
-  elif [[ -n $(man_field base 2) && -n $(man_field key 2) ]]; then
-    download key "$TMP/lab-ssh.tar"; tar -C "$LAB_ROOT" -xf "$TMP/lab-ssh.tar"; chmod 600 "$SSH_KEY"
+  elif [[ -n $(man_field base 2) ]]; then
+    fetch_key
     download base "$LAB_IMAGES_DIR/base/disk.qcow2"; chmod 0444 "$LAB_IMAGES_DIR/base/disk.qcow2"
   else log "no base image in bucket: run ./lab build-base"; fi
   if (( with_ckpt )); then
@@ -120,7 +167,7 @@ cmd_fetch() {
       fi
     fi
   fi
-  rm -f "$TMP"/*.tar "$TMP"/*.zst
+  rm -f "$TMP"/*.tar "$TMP"/*.zst "$TMP"/*.sm
 }
 
 cmd_publish() {
@@ -130,12 +177,13 @@ cmd_publish() {
     case $i in iso|base|key|image|checkpoints) "pub_$i" ;; *) die "unknown item $i" ;; esac
   done
   [[ " ${items[*]} " == *" base "* && " ${items[*]} " != *" key "* ]] && pub_key
-  rm -f "$TMP"/*.tar "$TMP"/*.zst; true
+  rm -f "$TMP"/*.tar "$TMP"/*.zst "$TMP"/*.sm; true
 }
 
 case ${1:-} in
   status) cmd_status ;;
   fetch) shift; cmd_fetch "$@" ;;
+  key) case ${2:-} in push) pub_key ;; fetch) fetch_key "${3:-}" ;; check) check_key ;; *) die "usage: artifacts.sh key push|fetch [--force]|check" ;; esac ;;
   publish) shift; cmd_publish "$@" ;;
-  *) sed -n '2,10p' "$0"; exit 2 ;;
+  *) sed -n '2,13p' "$0"; exit 2 ;;
 esac

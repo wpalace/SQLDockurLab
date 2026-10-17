@@ -36,6 +36,11 @@ for d in deploy/gcp/terraform/shared deploy/gcp/terraform/vms; do
   terraform -chdir="$d" fmt -check -diff || rc=1
   { terraform -chdir="$d" init -backend=false -input=false >/dev/null && terraform -chdir="$d" validate -no-color; } || rc=1
 done
+step "LAB_PASSWORD rules (lib/password.sh)"
+bash -c 'source lib/password.sh; bad=0
+  for p in "" "<change me>" "Ab1!" "abcdefgh1" "Abc def1!" "Abcdef1'"'"'x" "Abcd\$ef12" "MyAdministrator1!"; do password_problem "$p" >/dev/null && { echo "accepted bad: $p"; bad=1; }; done
+  for p in Lab-Passw0rd "abcdefg1!" "ABCDEFG1!" "Pa#ssw0rd!2026"; do password_problem "$p" >/dev/null || { echo "refused good: $p"; bad=1; }; done
+  exit $bad' || rc=1
 step xml; python3 -c "import xml.dom.minidom as m;m.parse('build/base/oem/lab/unattend-clone.xml')" || rc=1
 step python; python3 -m py_compile runtime/qmp.py && rm -rf runtime/__pycache__ || rc=1
 ((rc==0)) && echo "ALL STATIC CHECKS PASSED" || echo "STATIC CHECKS FAILED"

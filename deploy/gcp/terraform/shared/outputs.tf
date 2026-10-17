@@ -6,3 +6,4 @@ output "network_tag" { value = var.network_tag }
 output "bucket_name" { value = google_storage_bucket.artifacts.name }
 output "vm_service_account" { value = google_service_account.vm.email }
 output "publisher_service_account" { value = google_service_account.publisher.email }
+output "lab_ssh_key_secret" { value = google_secret_manager_secret.lab_ssh_key.secret_id }

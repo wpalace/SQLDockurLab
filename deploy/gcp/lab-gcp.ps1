@@ -76,6 +76,12 @@ Artifacts (shared bucket; run on the VM with the VM service account):
   artifacts VM           show the bucket manifest
   publish VM ITEM...     upload iso base key image checkpoints | all (publisher VMs only)
   fetch VM [--checkpoints]
+
+Lab SSH key (Secret Manager secret sqlag-lab-ssh-key; not in the bucket, not in Terraform state):
+  key push VM            add the VM's secrets/id_ed25519 as a new version (publishers only)
+  key fetch VM [--force] write the latest version to the VM (refuses a different key without --force)
+  key check VM           compare the VM's key with the latest version
+  key status             list the versions (from this workstation)
   cost                   rough cost estimate for the default VM size
 '@ | Write-Host
 }
@@ -250,6 +256,7 @@ function Invoke-Push([string]$key) {
     Set-Ctx; $n = Get-VmName $key
     Need git 'Install Git (Windows: winget install Git.Git).'
     & git -C $LabRoot diff --quiet HEAD --; if ($LASTEXITCODE) { Warn 'uncommitted changes are NOT copied (commit first)' }
+    $pw = Get-LabPassword   # fail fast before copying anything
     $br = (& git -C $LabRoot rev-parse --abbrev-ref HEAD).Trim()
     $tmp = Join-Path ([IO.Path]::GetTempPath()) "sqlag-$([guid]::NewGuid().ToString('N').Substring(0, 8))"
     New-Item -ItemType Directory -Path $tmp | Out-Null
@@ -257,14 +264,43 @@ function Invoke-Push([string]$key) {
         $b = Join-Path $tmp 'sql-ag-lab.bundle'
         & git -C $LabRoot bundle create $b HEAD $br 2>$null; if ($LASTEXITCODE) { Die 'git bundle failed' }
         Copy-ToVm $n $b '/tmp/sql-ag-lab.bundle'
+        # The password goes in a file (never on a command line) to lab.local.env on the VM (mode 600 there).
+        $pf = Join-Path $tmp 'lab-password.env'
+        [IO.File]::WriteAllText($pf, "LAB_PASSWORD='$pw'`n")
+        if (-not $IsWindows) { & chmod 600 $pf }
+        Copy-ToVm $n $pf '/tmp/lab-password.env'
     } finally { Remove-Item -Recurse -Force $tmp }
     Invoke-Rcmd $n @"
 set -e; id -nG | grep -qw docker || sudo usermod -aG docker "`$USER"
 if [ -d $RemoteDir/.git ]; then git -C $RemoteDir pull -q --ff-only /tmp/sql-ag-lab.bundle $br
 else git clone -q -b $br /tmp/sql-ag-lab.bundle $RemoteDir; fi
+$(Get-RemotePasswordMerge)
 git -C $RemoteDir log --oneline -1
 "@
     Ok "repository on ${n}:~/$RemoteDir (reconnect once so group docker applies)"
+}
+# Remote shell: move /tmp/lab-password.env into lab.local.env (replace the LAB_PASSWORD line), mode 600.
+function Get-RemotePasswordMerge {
+    @"
+chmod 600 /tmp/lab-password.env; touch $RemoteDir/lab.local.env; chmod 600 $RemoteDir/lab.local.env
+{ grep -v '^LAB_PASSWORD=' $RemoteDir/lab.local.env || true; cat /tmp/lab-password.env; } > $RemoteDir/lab.local.env.new
+mv $RemoteDir/lab.local.env.new $RemoteDir/lab.local.env; chmod 600 $RemoteDir/lab.local.env; rm -f /tmp/lab-password.env /tmp/sql-ag-lab.bundle
+"@
+}
+function Invoke-Key([string[]]$a) {  # key push|fetch|check VM | key status
+    Set-Ctx; $act = if ($a.Count) { $a[0] } else { '' }
+    switch ($act) {
+        { $_ -in 'push', 'fetch', 'check' } {
+            if ($a.Count -lt 2 -or -not $a[1]) { Die "usage: key $act VM" }
+            $extra = if ($a.Count -gt 2) { ' ' + ($a[2..($a.Count - 1)] -join ' ') } else { '' }
+            Invoke-Rcmd (Get-VmName $a[1]) "cd $RemoteDir && deploy/gcp/artifacts.sh key $act$extra"
+        }
+        'status' {
+            Invoke-Gcloud secrets versions list "$($script:Prefix)-lab-ssh-key" --project $script:Project '--format=table(name.basename():label=VERSION,state,createTime.date(tz=LOCAL))'
+            if ($LASTEXITCODE) { Die 'gcloud secrets versions list failed (secret missing or no roles/secretmanager.viewer/secretAccessor)' }
+        }
+        default { Die 'usage: key push|fetch|check VM | key status' }
+    }
 }
 function Invoke-Deploy([string]$key, [string[]]$Rest) {
     $Rest = @($Rest | Where-Object { $_ })
@@ -436,6 +472,7 @@ function Invoke-Spawn([string[]]$a) {
     Invoke-Check $name
     if (-not $up) { return }
     Invoke-Push $name
+    Invoke-Rcmd $name "cd $RemoteDir && deploy/gcp/artifacts.sh key fetch"   # Secret Manager; must be the key in the snapshot
     Log 'first restore of golden (a disk from a snapshot loads blocks on first read: can take minutes)'
     Invoke-Rcmd $name "cd $RemoteDir && LAB_UP_TIMEOUT=1800 ./lab up golden && ./lab console >/dev/null && ./lab health --deep --wait 300"
     Add-LabNote ("spawn $name ready at golden (create {0:N0} s, SSH {1:N0} s, golden {2:N0} s)" -f $t1, ($t2 - $t1), ($sw.Elapsed.TotalSeconds - $t2))
@@ -484,6 +521,7 @@ function Invoke-LabGcp([string[]]$Argv) {
         'golden' { Invoke-Golden (Arg1) $(if ($a.Count -gt 1) { $a[1] } else { '' }) }
         'finish' { Invoke-Test (Arg1); Invoke-Golden $a[0] $(if ($a.Count -gt 1) { $a[1] } else { '' }) }
         'spawn' { Invoke-Spawn $a }
+        'key' { Invoke-Key $a }
         'snapshots' { Invoke-Snapshots }
         'use-snapshot' { Set-UseSnapshot $(if ($a.Count) { $a[0] } else { '' }) }
         'tf-check' { Invoke-TfCheck }

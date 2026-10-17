@@ -100,4 +100,47 @@ $Body
     Write-LabWarn "no graphical terminal: to watch live, run in a terminal: pwsh -File $script"
 }
 
+# ---------------------------------------------------------------- LAB_PASSWORD --
+# Same rules as lib/password.sh (bash). lab.env keeps the placeholder; lab.local.env (gitignored) has the value.
+$script:PasswordPlaceholder = '<change me>'
+$script:PasswordHelp = @"
+Set the lab password in lab.local.env (gitignored; lab.env keeps the placeholder):
+    Add-Content lab.local.env "LAB_PASSWORD='YourPassw0rd-Here'"
+  Rules: 8 or more characters; 3 of: upper case, lower case, digit, other character;
+  not ' " \ `` `$ or space; must not contain 'Administrator' or 'sqlsvc'.
+  The password is baked into the base image, checkpoints and golden snapshots at build time:
+  a lab built with another password needs a rebuild (MAKE.md).
+"@
+function Get-LabEnvValue([string]$Name) {  # lab.env, overridden by lab.local.env; quotes removed
+    $v = $null
+    foreach ($f in 'lab.env', 'lab.local.env') {
+        $p = Join-Path $script:Root $f
+        if (-not (Test-Path $p)) { continue }
+        foreach ($l in Get-Content $p) {
+            if ($l -match "^\s*$([regex]::Escape($Name))=(.*)$") {
+                $x = $Matches[1].Trim()
+                if ($x.Length -ge 2 -and (($x[0] -eq "'" -and $x[-1] -eq "'") -or ($x[0] -eq '"' -and $x[-1] -eq '"'))) { $x = $x.Substring(1, $x.Length - 2) }
+                $v = $x
+            }
+        }
+    }
+    $v
+}
+function Get-LabPasswordProblem([AllowEmptyString()][AllowNull()][string]$Value) {  # $null when valid (plain text: it goes into env files)
+    $p = [string]$Value
+    if (-not $p -or $p -eq $script:PasswordPlaceholder) { return "LAB_PASSWORD is not set (empty or the placeholder $script:PasswordPlaceholder)" }
+    if ($p.Length -lt 8) { return 'LAB_PASSWORD is shorter than 8 characters' }
+    if ($p -match '[''"\\`$\s]') { return 'LAB_PASSWORD contains a character that the lab does not accept ('' " \ ` $ or white space)' }
+    if ($p -match 'administrator|sqlsvc') { return 'LAB_PASSWORD contains an account name (Administrator or sqlsvc)' }
+    $n = 0; foreach ($rx in '[A-Z]', '[a-z]', '[0-9]', '[^A-Za-z0-9]') { if ($p -cmatch $rx) { $n++ } }
+    if ($n -lt 3) { return "LAB_PASSWORD has only $n of the 4 character classes (needs 3)" }
+    $null
+}
+function Get-LabPassword {  # checked value; stops with help when it is not valid
+    $p = Get-LabEnvValue 'LAB_PASSWORD'
+    $m = Get-LabPasswordProblem $p
+    if ($m) { Stop-Lab "$m`n  $script:PasswordHelp" }
+    $p
+}
+
 Export-ModuleMember -Function *
