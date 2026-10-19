@@ -80,13 +80,23 @@ if ($findings.Count) {
     Write-Host '   no findings'
 }
 
-Write-Host '== Windows PowerShell 5.1 syntax (guest and base image scripts run in 5.1)'
+Write-Host '== pwsh parse and Windows PowerShell 5.1 syntax (guest and base image scripts run in 5.1)'
 $compat = @{
     IncludeRules = @('PSUseCompatibleSyntax')
     Rules        = @{ PSUseCompatibleSyntax = @{ Enable = $true; TargetVersions = @('5.1') } }
 }
 $guestScripts = @(Get-ChildItem -Path (Join-Path -Path $repo -ChildPath 'guest'),
     (Join-Path -Path $repo -ChildPath 'build/base/oem/lab') -Filter '*.ps1')
+foreach ($g in $guestScripts) {
+    $parseErrors = $null
+    [void][Management.Automation.Language.Parser]::ParseFile($g.FullName, [ref]$null, [ref]$parseErrors)
+    foreach ($e in @($parseErrors)) {
+        if ($e) {
+            Write-Host "$($g.Name):$($e.Extent.StartLineNumber) $($e.Message)"
+            $rc = 1
+        }
+    }
+}
 $compatFindings = @(
     foreach ($g in $guestScripts) { Invoke-AnalyzerWithRetry -Path $g.FullName -Settings $compat }
 )

@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
-# Runs the Formatting-section checks of every coding-standards skill used here (.standards/skills/*).
+# Runs the Formatting-section checks of every coding-standards skill used here
+# (.standards/skills/*).
 # A host tool is used when it is installed, otherwise its pinned container image.
 # Exit 0 only when every check passes. Usage: tests/standards-check.sh [--fix]
 #   --fix  run the formatters (shfmt -w, Invoke-Formatter, terraform fmt, ruff format) first
@@ -69,50 +70,17 @@ check_bash() {
 
 check_powershell() {
   step "powershell: Invoke-Formatter + Invoke-ScriptAnalyzer (PSScriptAnalyzerSettings.psd1)"
-  local script
-  # shellcheck disable=SC2016  # PowerShell code: $ is expanded by pwsh, not bash
-  script='$ErrorActionPreference = "Stop"
-    if (-not (Get-Module -ListAvailable PSScriptAnalyzer | Where-Object Version -ge 1.25.0)) {
-        Install-PSResource -Name PSScriptAnalyzer -Version 1.25.0 -Scope CurrentUser -TrustRepository
-    }
-    if ($env:STANDARDS_FIX -eq "1") {
-        foreach ($f in (git ls-files -- "*.ps1" "*.psm1" "*.psd1" ":!:.standards/**")) {
-            $raw = Get-Content -LiteralPath $f -Raw
-            $new = Invoke-Formatter -ScriptDefinition $raw -Settings ./PSScriptAnalyzerSettings.psd1
-            if ($new -cne $raw) { [IO.File]::WriteAllText((Resolve-Path -LiteralPath $f), $new) }
-        }
-    }
-    # One file per run: PSScriptAnalyzer 1.25 on pwsh 7.6 sometimes crashes in UseCorrectCasing
-    # (NullReferenceException in CommandInfo.Parameters). Retry only that crash, at most 3 runs per file.
-    $failed = $false
-    foreach ($f in (git ls-files -- "*.ps1" "*.psm1" "*.psd1" ":!:.standards/**")) {
-        foreach ($attempt in 1..3) {
-            try {
-                $out = & ./.standards/scripts/Test-PowerShellStandard.ps1 -Path $f *>&1 | Out-String
-                $rc = $LASTEXITCODE
-            } catch {
-                $out = $_ | Out-String
-                $rc = 1
-            }
-            if ($rc -eq 0 -or $out -notmatch "Object reference not set to an instance") { break }
-            Write-Output "PSScriptAnalyzer crashed on $f (known 1.25 UseCorrectCasing race); retrying"
-        }
-        if ($out.Trim()) { Write-Output $out }
-        if ($rc -ne 0) { $failed = $true }
-    }
-    if ($failed) { exit 1 }'
-  run_pwsh "$script" || fail PSScriptAnalyzer
-}
-
-run_pwsh() {
-  local script=$1
+  local args=(-NoProfile -File tests/Test-PowerShellFile.ps1)
+  ((fix)) && args+=(-Fix)
   if type -P pwsh >/dev/null; then
-    STANDARDS_FIX="$fix" pwsh -NoProfile -Command "$script"
+    pwsh "${args[@]}" || fail PSScriptAnalyzer
   else
-    # shellcheck disable=SC2016 # $PWD and $0 expand in the container's bash, not here.
-    "$DOCKER" run --rm -e STANDARDS_FIX="$fix" -e HOME=/tmp -u "$(id -u):$(id -g)" \
+    # shellcheck disable=SC2016 # $PWD and $@ expand in the container's bash, not here.
+    local cmd='git config --global --add safe.directory "$PWD" && exec pwsh "$@"'
+    "$DOCKER" run --rm -e HOME=/tmp -u "$(id -u):$(id -g)" \
       -v "$REPO_ROOT:$REPO_ROOT" -w "$REPO_ROOT" "$PWSH_IMAGE" \
-      bash -c 'git config --global --add safe.directory "$PWD" && pwsh -NoProfile -Command "$0"' "$script"
+      bash -c "$cmd" pwsh "${args[@]}" \
+      || fail PSScriptAnalyzer
   fi
 }
 
@@ -136,7 +104,8 @@ check_terraform() {
   if ((fix)); then
     tool terraform "$TERRAFORM_IMAGE" fmt -recursive deploy/gcp/terraform
   fi
-  tool terraform "$TERRAFORM_IMAGE" fmt -check -recursive -diff deploy/gcp/terraform || fail "terraform fmt"
+  tool terraform "$TERRAFORM_IMAGE" fmt -check -recursive -diff deploy/gcp/terraform \
+    || fail "terraform fmt"
   step "terraform: tflint --recursive (minimum failure severity notice)"
   "$DOCKER" run --rm -v "$REPO_ROOT:/data" -w /data "$TFLINT_IMAGE" \
     --recursive --config /data/.tflint.hcl --format compact --minimum-failure-severity=notice \
