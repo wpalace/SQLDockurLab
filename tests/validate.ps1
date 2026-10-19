@@ -49,9 +49,10 @@ foreach ($m in $modules) {
 }
 
 # PSScriptAnalyzer 1.25 on pwsh 7.6 sometimes crashes in UseCorrectCasing (NullReferenceException in
-# CommandInfo.Parameters). Retry only that crash, at most 3 runs per file.
+# CommandInfo.Parameters). Retry only that crash, at most 10 runs per file
+# (measured: up to 4 runs were needed for one file).
 function Invoke-AnalyzerWithRetry([string]$Path, [object]$Settings) {
-    foreach ($attempt in 1..3) {
+    foreach ($attempt in 1..10) {
         try {
             return Invoke-ScriptAnalyzer -Path $Path -Settings $Settings
         } catch [System.NullReferenceException] {
@@ -61,7 +62,7 @@ function Invoke-AnalyzerWithRetry([string]$Path, [object]$Settings) {
             Write-Host "   PSScriptAnalyzer crashed on $Path (known 1.25 race); retry $attempt"
         }
     }
-    throw "PSScriptAnalyzer crashed 3 times on $Path"
+    throw "PSScriptAnalyzer crashed 10 times on $Path"
 }
 
 Write-Host '== PSScriptAnalyzer (PSScriptAnalyzerSettings.psd1)'

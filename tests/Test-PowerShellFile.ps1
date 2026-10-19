@@ -6,7 +6,8 @@
     Checks every tracked PowerShell file outside .standards/ with Invoke-Formatter and
     Invoke-ScriptAnalyzer (PSScriptAnalyzerSettings.psd1). PSScriptAnalyzer 1.25 on pwsh 7.6
     sometimes crashes in UseCorrectCasing (NullReferenceException in CommandInfo.Parameters); a file
-    is retried only for that crash, at most 3 runs. Installs PSScriptAnalyzer 1.25 for the current
+    is retried only for that crash, at most 10 runs (a run that crashes is never accepted, even with exit
+    code 0). Installs PSScriptAnalyzer 1.25 for the current
     user when missing. Used by tests/standards-check.sh and the standards-check CI workflow.
 .PARAMETER Fix
     Rewrite files with Invoke-Formatter before checking them.
@@ -30,6 +31,8 @@ if (-not (Get-Module -ListAvailable -Name PSScriptAnalyzer | Where-Object Versio
 
 $files = @(git ls-files -- '*.ps1' '*.psm1' '*.psd1' ':!:.standards/**')
 $failed = $false
+# Measured on pwsh 7.6.7: up to 4 runs were needed for one file (the race hits about 1 run in 3).
+$maxAttempts = 10
 foreach ($f in $files) {
     if ($Fix) {
         $raw = Get-Content -LiteralPath $f -Raw
@@ -38,7 +41,8 @@ foreach ($f in $files) {
             [IO.File]::WriteAllText((Resolve-Path -LiteralPath $f), $new)
         }
     }
-    foreach ($attempt in 1..3) {
+    foreach ($attempt in 1..$maxAttempts) {
+        $global:LASTEXITCODE = 0 # the standard script ends without exit when the file passes
         try {
             $out = & $standard -Path $f *>&1 | Out-String
             $rc = $LASTEXITCODE
@@ -46,7 +50,12 @@ foreach ($f in $files) {
             $out = $_ | Out-String
             $rc = 1
         }
-        if ($rc -eq 0 -or $out -notmatch 'Object reference not set to an instance') {
+        $crashed = $out -match 'Object reference not set to an instance'
+        if (-not $crashed) {
+            break
+        }
+        if ($attempt -eq $maxAttempts) {
+            $rc = 1
             break
         }
         Write-Output "PSScriptAnalyzer crashed on $f (known 1.25 UseCorrectCasing race); retry $attempt"
