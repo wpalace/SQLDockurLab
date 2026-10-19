@@ -1,0 +1,7 @@
+# shfmt reads these keys when run without formatting flags (equivalent to -i 2 -ci -bn).
+[*.{sh,bash}]
+indent_style = space
+indent_size = 2
+max_line_length = 100
+switch_case_indent = true
+binary_next_line = true

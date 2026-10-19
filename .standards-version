@@ -1,0 +1,4 @@
+# Pinned coding-standards release. Updated by sync-standards.sh --upgrade.
+STANDARDS_REPO=/home/bill/.cache/sqlag-standards/coding-standards-repo
+STANDARDS_REF=v1.0.0
+STANDARDS_LANGUAGES=

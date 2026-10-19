@@ -1,0 +1,182 @@
+# Template for consuming projects: copy to .github/workflows/standards-check.yml.
+# Runs only the checks for languages present in the repository.
+name: Standards check
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: standards-check-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  detect:
+    runs-on: ubuntu-24.04
+    outputs:
+      python: ${{ steps.detect.outputs.python }}
+      bash: ${{ steps.detect.outputs.bash }}
+      powershell: ${{ steps.detect.outputs.powershell }}
+      csharp: ${{ steps.detect.outputs.csharp }}
+      terraform: ${{ steps.detect.outputs.terraform }}
+      docker: ${{ steps.detect.outputs.docker }}
+    steps:
+      - uses: actions/checkout@v7.0.1
+        with:
+          persist-credentials: false
+      - id: detect
+        name: Detect languages
+        run: |
+          files="$(git ls-files -- ':!:.standards/**')"
+          has() { grep -Eq "$1" <<< "${files}" && echo true || echo false; }
+          {
+            echo "python=$(has '\.pyi?$|(^|/)pyproject\.toml$')"
+            echo "bash=$(has '\.(sh|bash)$')"
+            echo "powershell=$(has '\.(ps1|psm1|psd1)$')"
+            echo "csharp=$(has '\.(cs|csproj|slnx?)$')"
+            echo "terraform=$(has '\.tf$')"
+            echo "docker=$(has '(^|/)(Dockerfile[^/]*|[^/]+\.dockerfile|(docker-)?compose[^/]*\.ya?ml)$')"
+          } >> "${GITHUB_OUTPUT}"
+
+  python:
+    needs: detect
+    if: needs.detect.outputs.python == 'true'
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v7.0.1
+        with:
+          persist-credentials: false
+      - name: ruff format --check
+        uses: astral-sh/ruff-action@v4.1.0
+        with:
+          version: "0.17.1"
+          args: format --check --diff
+      - name: ruff check
+        uses: astral-sh/ruff-action@v4.1.0
+        with:
+          version: "0.17.1"
+          args: check --output-format=github
+
+  bash:
+    needs: detect
+    if: needs.detect.outputs.bash == 'true'
+    runs-on: ubuntu-24.04
+    env:
+      SHFMT_VERSION: v3.14.1
+      SHELLCHECK_VERSION: 0.11.0.1
+    steps:
+      - uses: actions/checkout@v7.0.1
+        with:
+          persist-credentials: false
+      - name: Install shfmt
+        run: |
+          curl -fsSL -o "${RUNNER_TEMP}/shfmt" \
+            "https://github.com/mvdan/sh/releases/download/${SHFMT_VERSION}/shfmt_${SHFMT_VERSION}_linux_amd64"
+          chmod +x "${RUNNER_TEMP}/shfmt"
+          echo "${RUNNER_TEMP}" >> "${GITHUB_PATH}"
+      - name: shfmt -d
+        run: git ls-files -z -- '*.sh' '*.bash' ':!:.standards/**' | xargs -0 -r shfmt -d -i 2 -ci -bn
+      - name: shellcheck
+        run: |
+          git ls-files -z -- '*.sh' '*.bash' ':!:.standards/**' \
+            | xargs -0 -r pipx run --spec "shellcheck-py==${SHELLCHECK_VERSION}" shellcheck
+
+  powershell:
+    needs: detect
+    if: needs.detect.outputs.powershell == 'true'
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v7.0.1
+        with:
+          persist-credentials: false
+      - name: Invoke-Formatter and Invoke-ScriptAnalyzer
+        shell: pwsh
+        run: |
+          Install-PSResource -Name PSScriptAnalyzer -Version 1.25.0 -Scope CurrentUser -TrustRepository
+          ./.standards/scripts/Test-PowerShellStandard.ps1
+
+  csharp:
+    needs: detect
+    if: needs.detect.outputs.csharp == 'true'
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-dotnet@v6.0.0
+        with:
+          dotnet-version: 10.0.x
+      - name: dotnet format --verify-no-changes
+        run: |
+          # Prefer one solution file; otherwise check each project.
+          mapfile -t targets < <(git ls-files -- '*.slnx' '*.sln' | head -n 1)
+          if ((${#targets[@]} == 0)); then
+            mapfile -t targets < <(git ls-files -- '*.csproj')
+          fi
+          for target in "${targets[@]}"; do
+            dotnet format "${target}" --verify-no-changes --verbosity minimal
+          done
+
+  terraform:
+    needs: detect
+    if: needs.detect.outputs.terraform == 'true'
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v7.0.1
+        with:
+          persist-credentials: false
+      - uses: hashicorp/setup-terraform@v4.0.1
+        with:
+          terraform_version: "~1.16.0"
+          terraform_wrapper: false
+      - uses: terraform-linters/setup-tflint@v6.3.2
+        with:
+          tflint_version: v0.64.0
+      - name: terraform fmt -check -recursive
+        run: terraform fmt -check -recursive -diff
+      - name: tflint
+        env:
+          GITHUB_TOKEN: ${{ github.token }} # avoids rate limits when downloading plugins
+        run: |
+          tflint --init --config "${PWD}/.tflint.hcl"
+          tflint --recursive --config "${PWD}/.tflint.hcl" --format compact --minimum-failure-severity=notice
+
+  docker:
+    needs: detect
+    if: needs.detect.outputs.docker == 'true'
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v7.0.1
+        with:
+          persist-credentials: false
+      - name: hadolint
+        uses: hadolint/hadolint-action@v3.5.0
+        with:
+          recursive: true
+          dockerfile: "Dockerfile*"
+          config: .hadolint.yaml
+      - name: yamllint
+        run: pipx run yamllint==1.38.0 -c .yamllint.yaml --format github .
+      - name: docker compose config
+        run: |
+          # Required ${VAR:?} variables need values; fall back to the committed example file.
+          if [[ ! -f .env && -f .env.example ]]; then
+            cp .env.example .env
+          fi
+          # Validate each base file (with its auto-loaded override) and each base + compose.<env>.yaml pair.
+          while IFS= read -r base; do
+            dir="$(dirname -- "${base}")"
+            echo "::group::${base}"
+            (cd -- "${dir}" && docker compose config --quiet) # loads compose.override.yaml too
+            for extra in "${dir}"/compose.*.yaml; do
+              [[ -e "${extra}" && "${extra}" != *.override.yaml ]] || continue
+              docker compose --project-directory "${dir}" --file "${base}" --file "${extra}" config --quiet
+            done
+            echo "::endgroup::"
+          done < <(git ls-files -- '*compose.yaml' '*compose.yml' ':!:.standards/**' \
+            | grep -E '(^|/)(docker-)?compose\.ya?ml$' || true)

@@ -1,0 +1,24 @@
+# Managed by coding-standards (scripts/sync-standards.sh). Do not edit in projects; change it upstream.
+# YAML style for compose files and workflows: 2-space indent, 120-column lines.
+extends: default
+
+ignore: |
+  .standards/
+
+rules:
+  line-length:
+    max: 120
+  indentation:
+    spaces: 2
+    indent-sequences: consistent
+  document-start: disable
+  truthy:
+    check-keys: false # GitHub Actions uses an "on:" key
+  braces:
+    min-spaces-inside: 0
+    max-spaces-inside: 1
+  brackets:
+    min-spaces-inside: 0
+    max-spaces-inside: 0
+  comments:
+    min-spaces-from-content: 1

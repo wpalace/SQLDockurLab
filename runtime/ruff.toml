@@ -1,0 +1,7 @@
+# Project-owned override (not managed by sync-standards.sh): the nearest config wins for runtime/.
+# qmp.py runs inside the runtime image (Debian trixie, Python 3.13), so the target is py313:
+# with py314, ruff format rewrites "except (A, B):" to the 3.14-only "except A, B:".
+# qmp.py is excluded while the runtime image inputs are frozen (see AGENTS.md and ../.editorconfig).
+extend = "../ruff.toml"
+target-version = "py313"
+extend-exclude = ["qmp.py"]

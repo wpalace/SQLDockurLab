@@ -1,0 +1,62 @@
+# Template for consuming projects: copy to .github/workflows/sync-standards.yml.
+name: Sync coding standards
+
+on:
+  schedule:
+    - cron: "23 14 * * 1" # Mondays 14:23 UTC
+  workflow_dispatch:
+    inputs:
+      upgrade:
+        description: Move to the newest tag with the same major version
+        type: boolean
+        default: true
+
+permissions:
+  contents: write
+  pull-requests: write
+
+concurrency:
+  group: sync-standards
+  cancel-in-progress: false
+
+jobs:
+  sync:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    env:
+      # Only needed when the standards repo is private: a read-only token stored as STANDARDS_TOKEN.
+      STANDARDS_TOKEN: ${{ secrets.STANDARDS_TOKEN }}
+    steps:
+      - name: Check out
+        uses: actions/checkout@v7.0.1
+
+      - name: Authenticate to the standards repo
+        if: env.STANDARDS_TOKEN != ''
+        run: |
+          git config --global \
+            url."https://x-access-token:${STANDARDS_TOKEN}@github.com/".insteadOf "https://github.com/"
+
+      - name: Sync standards
+        env:
+          UPGRADE: ${{ github.event_name == 'schedule' || inputs.upgrade }}
+        run: |
+          args=()
+          if [[ "${UPGRADE}" == "true" ]]; then
+            args+=(--upgrade)
+          fi
+          bash .standards/scripts/sync-standards.sh "${args[@]}"
+
+      - name: Open pull request
+        uses: peter-evans/create-pull-request@v8.1.1
+        with:
+          # A PAT or GitHub App token lets the PR trigger standards-check; GITHUB_TOKEN PRs do not run workflows.
+          token: ${{ secrets.STANDARDS_PR_TOKEN || github.token }}
+          branch: chore/sync-coding-standards
+          delete-branch: true
+          commit-message: "chore: sync coding standards"
+          title: "chore: sync coding standards"
+          body: |
+            Automated sync of `.standards/` and managed config files from the pinned standards release.
+            See `.standards/CHANGELOG.md` for what changed. Fix any new `standards-check` findings in
+            a separate commit from this sync.
+          labels: standards

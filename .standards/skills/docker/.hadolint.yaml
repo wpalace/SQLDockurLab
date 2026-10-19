@@ -1,0 +1,15 @@
+# Managed by coding-standards (scripts/sync-standards.sh). Do not edit in projects; change it upstream.
+# Docker standard: pinned bases, non-root, no secrets in layers, clean apt layers.
+failure-threshold: warning
+override:
+  error:
+    - DL3002 # last USER should not be root
+    - DL3004 # do not use sudo
+    - DL3006 # always tag the base image
+    - DL3007 # never use :latest
+    - DL3020 # use COPY instead of ADD for files
+    - DL3025 # JSON form for CMD/ENTRYPOINT
+  info:
+    - DL3008 # apt version pins: we pin base images by digest instead
+    - DL3013 # pip version pins: use lock files (uv.lock) instead
+    - DL3018 # apk version pins: we pin base images by digest instead

@@ -1,0 +1,11 @@
+# Add to the project's pyproject.toml. Ruff reads the root ruff.toml installed by
+# sync-standards.sh, which takes precedence over [tool.ruff] here, so do not
+# duplicate Ruff settings in pyproject.toml.
+[project]
+requires-python = ">=3.14"
+
+[dependency-groups]
+dev = ["mypy", "pytest", "ruff==0.17.*"]
+
+[tool.mypy]
+strict = true

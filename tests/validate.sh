@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
-# Static validation: shellcheck, terraform, PowerShell parse (pwsh), YAML lint, compose config, XML, python.
+# Static validation (TC1): house coding standards checks, PowerShell parse, Pester, compose config,
+# terraform validate, password rules, XML, python.
 set -uo pipefail
 cd "$(dirname "$0")/.." || exit 1
 DOCKER=${DOCKER:-docker}
@@ -11,29 +12,21 @@ tool() { # tool NAME IMAGE ENTRYPOINT ARGS...
   if type -P "$name" >/dev/null; then command "$name" "$@"
   else $DOCKER run --rm -v "$PWD:$PWD" -w "$PWD" --entrypoint "$ep" "$image" "$@"; fi
 }
-shellcheck() { tool shellcheck docker.io/koalaman/shellcheck:stable shellcheck "$@"; }
-yamllint() { tool yamllint docker.io/cytopia/yamllint:latest yamllint "$@"; }
-pwsh() { tool pwsh mcr.microsoft.com/powershell:latest pwsh "$@"; }
-step shellcheck; shellcheck -x lab lib/*.sh runtime/*.sh tests/*.sh tests/fakeguest/build.sh deploy/gcp/lab-gcp deploy/gcp/*.sh deploy/gcp/terraform/vms/startup.sh || rc=1
-step "pwsh parse"
+pwsh() { tool pwsh mcr.microsoft.com/dotnet/sdk:10.0 pwsh "$@"; }
+terraform() { tool terraform docker.io/hashicorp/terraform:1.13 terraform "$@"; }
+step "house coding standards (tests/standards-check.sh: every Formatting-section check)"
+tests/standards-check.sh || rc=1
+step "pwsh parse (guest and base image scripts)"
 for f in guest/*.ps1 build/base/oem/lab/*.ps1; do
   pwsh -NoProfile -Command "\$e=\$null;[void][Management.Automation.Language.Parser]::ParseFile('$PWD/$f',[ref]\$null,[ref]\$e);if(\$e){\$e|%{'$f:'+\$_.Extent.StartLineNumber+' '+\$_.Message};exit 1}" || rc=1
 done
-if pwsh -NoProfile -Command 'exit [int](-not (Get-Module -ListAvailable PSScriptAnalyzer))'; then
-  step PSScriptAnalyzer
-  pwsh -NoProfile -Command "\$r=@(Invoke-ScriptAnalyzer -Path guest -Severity Error -ExcludeRule PSAvoidUsingConvertToSecureStringWithPlainText)+@(Invoke-ScriptAnalyzer -Path build/base/oem/lab -Severity Error -ExcludeRule PSAvoidUsingConvertToSecureStringWithPlainText); \$r|ft -auto|Out-String|Write-Host; exit \$r.Count" || rc=1
-fi
-step "operator front end (tests/validate.ps1: parse, PSScriptAnalyzer, Pester)"
-if type -P pwsh >/dev/null; then command pwsh -NoProfile -File tests/validate.ps1 || rc=1
-else pwsh -NoProfile -File tests/validate.ps1 || rc=1; fi  # container: validate.ps1 installs its modules
-step yamllint; yamllint -d '{extends: relaxed, rules: {line-length: disable}}' compose.yml compose.vhost.yml build/base/compose.yml ci/*.yml || rc=1
+step "operator front end (tests/validate.ps1: parse, PSScriptAnalyzer with the house settings, Pester)"
+pwsh -NoProfile -File tests/validate.ps1 || rc=1
 step "compose config"
-$DOCKER compose -f compose.yml -f compose.vhost.yml --env-file lab.env config -q || rc=1
-LAB_PASSWORD=x $DOCKER compose -f build/base/compose.yml --env-file lab.env config -q || rc=1
-terraform() { tool terraform docker.io/hashicorp/terraform:1.13 terraform "$@"; }
-step "terraform fmt + validate (no credentials, no backend)"
+"$DOCKER" compose -f compose.yml -f compose.vhost.yml --env-file lab.env config -q || rc=1
+LAB_PASSWORD=x "$DOCKER" compose -f build/base/compose.yml --env-file lab.env config -q || rc=1
+step "terraform validate (no credentials, no backend)"
 for d in deploy/gcp/terraform/shared deploy/gcp/terraform/vms; do
-  terraform -chdir="$d" fmt -check -diff || rc=1
   { terraform -chdir="$d" init -backend=false -input=false >/dev/null && terraform -chdir="$d" validate -no-color; } || rc=1
 done
 step "LAB_PASSWORD rules (lib/password.sh)"

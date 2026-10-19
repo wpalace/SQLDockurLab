@@ -1,0 +1,25 @@
+# AGENTS.md
+
+Instructions for every AI coding agent working in this repository (Cursor, Claude Code, Copilot, Codex, Grok, and others).
+
+## Coding standards
+
+This project follows the house coding standards, vendored at `.standards/` (pinned in `.standards-version`). Languages used here:
+
+{{LANGUAGES}}
+
+## Rules
+
+1. **Load the matching skill before editing.** Before you create or change a file in one of these languages, read its `SKILL.md` above and follow it. If a file mixes languages (for example a Dockerfile that runs a shell script), load each skill involved.
+2. **Run the checks before declaring done.** Run the format and lint commands from the skill's Formatting section (or `pre-commit run --all-files`) and fix every finding. Never say a task is complete while a check fails. If a check cannot run here, say so explicitly.
+3. **Keep reformatting and logic changes in separate commits.** Commit formatter-only changes on their own first, then the behavior change.
+4. **Don't edit `.standards/` or managed configs** (`ruff.toml`, `.tflint.hcl`, `.hadolint.yaml`, `.yamllint.yaml`, `PSScriptAnalyzerSettings.psd1`, or the managed block in `.editorconfig`). They are overwritten by `.standards/scripts/sync-standards.sh`. Propose changes upstream in the standards repo instead.
+5. **Project rules win on conflict.** Anything in the project-specific section below overrides the shared standard.
+
+## Running the project
+
+`MAKE.md` is the entry point for building, testing, and running this project. Read it before running commands, and use the commands it documents rather than guessing.
+
+## Project-specific notes
+
+<!-- Add project-specific conventions here. Keep it short. -->

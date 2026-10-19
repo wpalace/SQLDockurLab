@@ -1,0 +1,50 @@
+root = true
+
+# BEGIN coding-standards (managed by sync-standards.sh)
+[*]
+charset = utf-8
+end_of_line = lf
+insert_final_newline = true
+trim_trailing_whitespace = true
+
+[*.md]
+trim_trailing_whitespace = false
+
+[*.{py,pyi}]
+indent_style = space
+indent_size = 4
+max_line_length = 100
+
+# shfmt reads these keys when run without formatting flags (equivalent to -i 2 -ci -bn).
+[*.{sh,bash}]
+indent_style = space
+indent_size = 2
+max_line_length = 100
+switch_case_indent = true
+binary_next_line = true
+
+[*.{ps1,psm1,psd1}]
+indent_style = space
+indent_size = 4
+max_line_length = 115
+
+[{*.yaml,*.yml,Dockerfile,*.dockerfile}]
+indent_style = space
+indent_size = 2
+
+[*.{tf,tfvars,hcl}]
+indent_style = space
+indent_size = 2
+max_line_length = 100
+# END coding-standards
+
+# Project-owned (outside the managed block). The runtime image inputs are frozen: any change
+# rebuilds the image, and the image ID is part of the checkpoint fingerprint (lib/common.sh
+# vm_fingerprint), so every checkpoint, published artifact and golden snapshot would stop
+# restoring. Reformat them only together with a planned checkpoint rebuild. See AGENTS.md.
+[runtime/{launcher,router}.sh]
+ignore = true
+
+# Vendored standards are checked upstream.
+[.standards/**]
+ignore = true
