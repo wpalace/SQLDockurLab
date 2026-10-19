@@ -53,7 +53,7 @@ Docker group: if `./lab doctor` says the session lacks group `docker`, log out a
 lab bridge MACs and add DOCKER-USER rules (without it, restores can see brief ARP/SSH timeouts).
 Step-by-step build procedure for agents: [MAKE.md](MAKE.md).
 
-Connect from the host: `sqlcmd -S tcp:10.50.0.60,1433 -U sa -P 'P@ssw0rd!2025' -C` (listener), or
+Connect from the host: `sqlcmd -S tcp:10.50.0.60,1433 -U sa -P "$LAB_PASSWORD" -C` (listener), or
 any node IP. `./lab info` prints everything. Use SQL auth from the host (see *Time*).
 
 ## Checkpoints (predetermined states)
@@ -228,7 +228,7 @@ The lab runs on any Linux host with KVM and Docker. `MAKE.md` section 1a selects
 
 ## Connect with VS Code
 
-Use the `ms-mssql.mssql` extension with SQL authentication (`sa`, password `LAB_PASSWORD` in `lab.env`,
+Use the `ms-mssql.mssql` extension with SQL authentication (`sa`, password `LAB_PASSWORD` in `lab.local.env`,
 trust server certificate). Local lab: listener `10.50.0.60` (MultiSubnetFailover), SQL1-SQL4
 `10.50.0.11`, `10.50.0.12`, `10.51.0.13`, `10.51.0.14`. GCP: `./lab gcp tunnel VM --sql`, then
 `127.0.0.1,14330` (listener) and `127.0.0.1,14331`-`14334`. Details: MAKE.md section 7a.

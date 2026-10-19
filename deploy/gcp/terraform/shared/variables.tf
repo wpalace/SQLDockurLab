@@ -16,7 +16,7 @@ variable "name_prefix" {
 }
 
 variable "enable_apis" {
-  description = "Enable the Compute, IAP, Storage and IAM APIs in the project."
+  description = "Enable the Compute, IAP, Storage, IAM, OS Login and Secret Manager APIs in the project."
   type        = bool
   default     = true
 }
@@ -87,13 +87,13 @@ variable "artifact_retention_days" {
 }
 
 variable "team_members" {
-  description = "Principals (user:alice@example.com, group:...) that may create lab VMs, SSH via IAP and read the bucket."
+  description = "Principals (user:alice@example.com, group:...) that build and operate lab VMs: create/delete VMs (roles/compute.instanceAdmin.v1), OS Login admin, IAP tunnel, act as the lab service accounts, read the bucket and the lab SSH key."
   type        = list(string)
   default     = []
 }
 
 variable "publishers" {
-  description = "Principals that may write artifacts to the bucket from their own credentials."
+  description = "Principals that may write artifacts to the bucket and add lab SSH key versions (roles/secretmanager.secretVersionAdder) with their own credentials."
   type        = list(string)
   default     = []
 }
@@ -102,4 +102,23 @@ variable "grant_project_roles" {
   description = "Grant team_members the project roles they need (IAP tunnel, OS Login admin, instance admin). Needs project IAM admin."
   type        = bool
   default     = true
+}
+
+variable "lab_users" {
+  description = <<-EOT
+    Principals that USE a lab VM made by somebody else (for example a clone from ./lab gcp spawn).
+    Grants (project level, when grant_project_roles = true): roles/iap.tunnelResourceAccessor (IAP SSH
+    and tunnels), roles/compute.osAdminLogin (OS Login with sudo: ./lab needs group docker),
+    roles/compute.viewer (find the VM: gcloud compute ssh, ./lab gcp list); and
+    roles/iam.serviceAccountUser on the lab-vm service account (OS Login requires it).
+    No VM create/start/stop/delete, no bucket or secret access of their own (the VM reads them).
+  EOT
+  type        = list(string)
+  default     = []
+}
+
+variable "lab_key_readers" {
+  description = "Principals that may read the lab SSH private key (roles/secretmanager.secretAccessor on the secret only), for example to use it outside a lab VM. VMs and team_members can read it already."
+  type        = list(string)
+  default     = []
 }

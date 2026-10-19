@@ -33,6 +33,7 @@ cat > /etc/sql-ag-lab/gcp.env <<CONF
 LAB_GCP_BUCKET=$(md attributes/lab-bucket)
 LAB_GCP_CPU_MODEL=$(md attributes/lab-cpu-model)
 LAB_GCP_OWNER=$(md attributes/lab-owner)
+LAB_GCP_KEY_SECRET=$(md attributes/lab-key-secret)
 LAB_GCP_NAME=$(md name)
 LAB_GCP_MACHINE_TYPE=$(md machine-type | sed 's#.*/##')
 CONF

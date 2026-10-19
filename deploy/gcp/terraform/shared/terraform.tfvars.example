@@ -5,15 +5,33 @@ project_id  = "my-gcp-project" # REQUIRED
 region      = "us-central1"
 bucket_name = "my-team-sqlag-artifacts" # REQUIRED, globally unique
 
-# Who may create lab VMs, SSH through IAP and read artifacts.
+# Access (edit a list, then run ./lab gcp apply shared --yes; remove an entry to revoke).
+# team_members: build and operate lab VMs: create/delete VMs, OS Login admin, IAP tunnel,
+#   act as the lab service accounts, read the bucket and the lab SSH key.
 team_members = [
   # "user:alice@example.com",
   # "group:dba-team@example.com",
 ]
 
-# Who may write artifacts with their own credentials (publisher VMs can always write).
+# publishers: also write bucket artifacts and add lab SSH key versions with their own
+#   credentials (publisher VMs can always do both).
 publishers = [
   # "user:alice@example.com",
+]
+
+# lab_users: use a lab VM that somebody else made (for example a clone from ./lab gcp spawn):
+#   IAP SSH and tunnels, OS Login with sudo (./lab needs group docker), see the VMs,
+#   act as the lab-vm service account (OS Login needs it). Project-wide: use a project
+#   for the lab only. No VM create/start/stop/delete; no bucket or key access of their own
+#   (the VM reads the artifacts and the key with its service account).
+lab_users = [
+  # "user:bob@example.com",
+]
+
+# lab_key_readers: read the lab SSH private key only (Secret Manager secret sqlag-lab-ssh-key,
+#   roles/secretmanager.secretAccessor), for example to use it outside a lab VM.
+lab_key_readers = [
+  # "user:bob@example.com",
 ]
 
 # Network: a dedicated VPC by default. Set create_network = false to reuse one.

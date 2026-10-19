@@ -24,6 +24,17 @@ watch_gcp() {
 while :; do ./lab gcp watch '$1'; echo '[watch] connection to the VM lost; retrying in 15 s (Ctrl-C to stop)'; sleep 15; done" "${2:-}"
 }
 die()  { printf '%s  error%s %s\n' "$(_t $'\e[31m')" "$(_t $'\e[0m')" "$*" >&2; exit 1; }
+# shellcheck source=lib/password.sh
+source "$LAB_ROOT/lib/password.sh"
+# LAB_PASSWORD of this workstation: lab.env, overridden by lab.local.env (gitignored). Checked; dies with help.
+lab_password() {
+  local p m
+  # shellcheck disable=SC1091
+  p=$(set +u; source "$LAB_ROOT/lab.env" >/dev/null 2>&1; [[ -f "$LAB_ROOT/lab.local.env" ]] && source "$LAB_ROOT/lab.local.env" >/dev/null 2>&1; printf '%s' "${LAB_PASSWORD:-}")
+  m=$(password_problem "$p") || die "$m
+  $LAB_PASSWORD_HELP"
+  printf '%s' "$p"
+}
 
 usage() {
   cat <<'USAGE'
@@ -72,6 +83,12 @@ Artifacts (shared bucket; run on the VM with the VM service account):
   publish VM ITEM...     upload iso base key image checkpoints | all (publisher VMs only)
   fetch VM [--checkpoints]
                          download artifacts that exist into the VM's lab directory
+
+Lab SSH key (Secret Manager secret sqlag-lab-ssh-key; not in the bucket, not in Terraform state):
+  key push VM            add the VM's secrets/id_ed25519 as a new version (publishers only)
+  key fetch VM [--force] write the latest version to the VM (refuses a different key without --force)
+  key check VM           compare the VM's key with the latest version
+  key status             list the versions (from this workstation)
   cost                   rough cost estimate for the default VM size
 USAGE
 }
@@ -168,14 +185,33 @@ cmd_check() {
 cmd_push() {
   ctx; local n; n=$(vm_name "$1")
   git -C "$LAB_ROOT" diff --quiet HEAD -- || warn "uncommitted changes are NOT copied (commit first)"
+  local pw; pw=$(lab_password)   # fail fast before copying anything
   local b; b=$(mktemp -d)/sql-ag-lab.bundle; local br; br=$(git -C "$LAB_ROOT" rev-parse --abbrev-ref HEAD)
   git -C "$LAB_ROOT" bundle create "$b" HEAD "$br" 2>/dev/null
-  gc compute scp --project "$PROJECT" --zone "$ZONE" --tunnel-through-iap --quiet "$b" "$n:/tmp/sql-ag-lab.bundle"
+  # The password goes in a mode-600 file (never on a command line) to lab.local.env on the VM.
+  ( umask 077; printf "LAB_PASSWORD='%s'\n" "$pw" > "$(dirname "$b")/lab-password.env" )
+  gc compute scp --project "$PROJECT" --zone "$ZONE" --tunnel-through-iap --quiet "$b" "$(dirname "$b")/lab-password.env" "$n:/tmp/"
   rcmd "$n" "set -e; id -nG | grep -qw docker || sudo usermod -aG docker \"\$USER\"
     if [ -d $REMOTE_DIR/.git ]; then git -C $REMOTE_DIR pull --ff-only /tmp/sql-ag-lab.bundle $br
     else git clone -q -b $br /tmp/sql-ag-lab.bundle $REMOTE_DIR; fi
+    $(remote_password_merge)
     git -C $REMOTE_DIR log --oneline -1"
   rm -rf "$(dirname "$b")"; ok "repository on $n:~/$REMOTE_DIR (reconnect once so group docker applies)"
+}
+# Remote shell: move /tmp/lab-password.env into lab.local.env (replace the LAB_PASSWORD line), mode 600.
+remote_password_merge() {
+  printf '%s' "chmod 600 /tmp/lab-password.env; touch $REMOTE_DIR/lab.local.env; chmod 600 $REMOTE_DIR/lab.local.env
+    { grep -v '^LAB_PASSWORD=' $REMOTE_DIR/lab.local.env || true; cat /tmp/lab-password.env; } > $REMOTE_DIR/lab.local.env.new
+    mv $REMOTE_DIR/lab.local.env.new $REMOTE_DIR/lab.local.env; chmod 600 $REMOTE_DIR/lab.local.env; rm -f /tmp/lab-password.env /tmp/sql-ag-lab.bundle"
+}
+cmd_key() {  # key push|fetch|check VM | key status
+  ctx; local a=${1:-}; shift || true
+  case $a in
+    push|fetch|check) local n; n=$(vm_name "${1:?usage: key $a VM}"); shift
+      rcmd "$n" "cd $REMOTE_DIR && deploy/gcp/artifacts.sh key $a $*" ;;
+    status) gc secrets versions list "${PREFIX}-lab-ssh-key" --project "$PROJECT" --format='table(name.basename():label=VERSION,state,createTime.date(tz=LOCAL))' ;;
+    *) die "usage: key push|fetch|check VM | key status" ;;
+  esac
 }
 cmd_deploy() {
   ctx; local n; n=$(vm_name "$1"); shift
@@ -326,6 +362,7 @@ d and e.update(disk_type=d); m and e.update(machine_type=m); print(json.dumps(e)
   cmd_check "$name"
   (( up )) || return 0
   cmd_push "$name"
+  rcmd "$name" "cd $REMOTE_DIR && deploy/gcp/artifacts.sh key fetch"   # Secret Manager; must be the key in the snapshot
   log "first restore of golden (a disk from a snapshot loads blocks on first read: can take minutes)"
   rcmd "$name" "cd $REMOTE_DIR && LAB_UP_TIMEOUT=1800 ./lab up golden && ./lab console >/dev/null && ./lab health --deep --wait 300"
   note "spawn $name ready at golden (create $((t1 - t0)) s, SSH $((t2 - t1)) s, golden $((SECONDS - t2)) s)"
@@ -366,6 +403,7 @@ main() {
     golden) cmd_golden "${1:?VM required}" "${@:2}" ;;
     finish) cmd_finish "${1:?VM required}" "${@:2}" ;;
     spawn) cmd_spawn "$@" ;;
+    key) cmd_key "$@" ;;
     snapshots) cmd_snapshots ;;
     use-snapshot) cmd_use_snapshot "$@" ;;
     tf-check) cmd_tf_check ;;

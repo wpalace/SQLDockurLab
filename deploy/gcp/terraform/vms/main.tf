@@ -108,6 +108,7 @@ resource "google_compute_instance" "lab" {
     lab-cpu-model  = each.value.cpu_model
     lab-timezone   = var.timezone
     lab-owner      = each.value.owner
+    lab-key-secret = "${var.name_prefix}-lab-ssh-key" # Secret Manager secret of the shared root
     startup-script = file("${path.module}/startup.sh")
   }
 
