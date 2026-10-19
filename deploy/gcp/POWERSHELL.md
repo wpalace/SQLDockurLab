@@ -8,11 +8,12 @@ Windows, Linux and macOS. The lab host (GCE VM) stays Linux and bash.
 | Bash (operator machine) | PowerShell | Notes |
 |---|---|---|
 | `lab` (`gcp`, `log`, `watch`) | `lab.ps1` | other `lab` commands are the Linux lab engine (not converted) |
-| `deploy/gcp/lab-gcp` | `deploy/gcp/lab-gcp.ps1` | same subcommands and flags; new: `tools`, `console VM`, `tunnel --open` |
+| `deploy/gcp/lab-gcp` | `deploy/gcp/lab-gcp.ps1` | same subcommands and flags; new: `tools` |
 | `lib/watch.sh` (`watch_open`, `watch_local`) | `lib/LabHost.psm1` (`Open-LabWatch`) | Windows Terminal or a new pwsh window; Linux terminals as before |
 | `lib/common.sh` `plog` / `./lab log` | `lib/LabHost.psm1` (`Write-LabProgress`, `Add-LabNote`) | same `logs/progress.log` and `TRANSCRIPT.md` lines |
 | python3 in `spawned_edit` | `Edit-Spawned` (`ConvertFrom-Json -AsHashtable`) | no python on the operator machine |
 | `gcloud compute ssh -- -N -L ...` (tunnel) | the same, started with `Start-Process`; `--open` opens the browser | consoles bind 127.0.0.1 on the VM, so IAP TCP forwarding (`start-iap-tunnel`) cannot reach them |
+| `console_token`, `console_url` in `lab-gcp` | `Get-ConsoleToken`, `Get-ConsoleUrl` | the tunnel reads the console token of the lab host over IAP SSH (`./lab console token`) and puts it in the URL fragment; it is printed to the terminal only |
 | `lib/password.sh` (`password_problem`, `lab_password` in `lab-gcp`) | `lib/LabHost.psm1` (`Get-LabPasswordProblem`, `Get-LabPassword`) | same rules; `push` refuses to run without a valid `LAB_PASSWORD` in `lab.local.env` and copies it to the VM in a file |
 | `key push/fetch/check VM`, `key status` | `Invoke-Key` | the VM runs `artifacts.sh key ...` (Secret Manager); `status` uses the operator's gcloud |
 | `tests/validate.sh` | + `tests/validate.ps1`, `tests/LabGcp.Tests.ps1` | parse, PSScriptAnalyzer, Pester |

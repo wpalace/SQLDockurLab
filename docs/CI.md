@@ -26,6 +26,8 @@ File: [`.github/workflows/standards-check.yml`](../.github/workflows/standards-c
 - **Tool versions are pinned** (actions, shfmt, ShellCheck, PSScriptAnalyzer, Terraform, tflint,
   hadolint, yamllint, ruff), so a new tool release cannot break the build by surprise.
   `tests/standards-check.sh` and `.pre-commit-config.yaml` use the same versions.
+  The lab's own container images (the installer image is pinned by digest) are listed in
+  [IMAGES.md](IMAGES.md), with the procedure to change a pin.
 
 The workflow has five jobs. They run in parallel, and each must pass.
 
