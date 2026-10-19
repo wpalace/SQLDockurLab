@@ -1,8 +1,9 @@
 #!/usr/bin/env python3
 """Check one lab console WebSocket endpoint (noVNC gateway) without a browser.
 
-Usage: console_check.py URL [--origin ORIGIN] [--no-origin]
-URL is a console URL as printed by ./lab console, for example
+Usage: console_check.py URL|- [--origin ORIGIN] [--no-origin] [--strip-token]
+URL is a console URL as printed by ./lab console ("-": read it from stdin, so that the token is
+not in the process arguments), for example
 http://127.0.0.1:6111/vnc.html#...&path=websockify%3Ftoken%3D...
 The script opens ws://HOST:PORT/<path> with the Origin of the URL (or --origin) and prints one
 line: "accepted RFB <version>" (exit 0) or "rejected <reason>" (exit 1).
@@ -83,13 +84,17 @@ def check(url, origin):
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
-    parser.add_argument("url")
+    parser.add_argument("url", help='console URL, or "-" to read it from stdin')
     parser.add_argument("--origin", help="Origin header (default: scheme://host:port of URL)")
     parser.add_argument("--no-origin", action="store_true", help="send no Origin header")
+    parser.add_argument("--strip-token", action="store_true", help="drop the fragment (no token)")
     args = parser.parse_args()
-    parts = urllib.parse.urlsplit(args.url)
+    url = sys.stdin.readline().strip() if args.url == "-" else args.url
+    if args.strip_token:
+        url = url.split("#", 1)[0]
+    parts = urllib.parse.urlsplit(url)
     origin = None if args.no_origin else args.origin or f"{parts.scheme}://{parts.netloc}"
-    accepted, detail = check(args.url, origin)
+    accepted, detail = check(url, origin)
     print(("accepted " if accepted else "rejected ") + detail)
     return 0 if accepted else 1
 

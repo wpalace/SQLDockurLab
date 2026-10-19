@@ -322,6 +322,17 @@ console_token() { # GCE-NAME
   t=$(rcmd "$1" "cd $REMOTE_DIR && ./lab console >/dev/null 2>&1; ./lab console token" 2>/dev/null | tr -d '\r' | tail -n 1) || true
   [[ $t =~ ^[0-9a-f]{48}$ ]] && printf '%s' "$t"
 }
+# The browser gets a 0600 launcher file (secrets/console-gcp-PORT.html, gitignored) instead of the
+# URL, so the token is not in any process argv on this machine.
+open_console() { # PORT TOKEN
+  local d="$LAB_ROOT/secrets" f
+  mkdir -p "$d"
+  chmod 700 "$d"
+  f="$d/console-gcp-$1.html"
+  (umask 077 && printf '<!doctype html><meta charset="utf-8"><title>lab console</title><script>location.replace("%s")</script>\n' \
+    "$(console_url "$1" "$2")" >"$f")
+  open_url "$f"
+}
 open_url() {
   if command -v xdg-open >/dev/null; then
     xdg-open "$1" >/dev/null 2>&1 &
@@ -387,10 +398,10 @@ cmd_tunnel() {
     kill -0 "$pid" 2>/dev/null || die "tunnel to $n stopped"
     sleep 0.5
   done
-  for u in "${urls[@]:1}"; do open_url "$u" || break; done
+  for p in 6111 6112 6113 6114 6115; do open_console "$((p + off))" "$token" || break; done
   # the base build console only while the build runs
   port_busy "$((8006 + off))" && curl -fs -o /dev/null --max-time 5 "http://127.0.0.1:$((8006 + off))/vnc.html" \
-    && open_url "${urls[0]}"
+    && open_console "$((8006 + off))" "$token"
   ok "console URLs opened in the default browser"
   wait "$pid"
 }

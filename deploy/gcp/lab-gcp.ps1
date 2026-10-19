@@ -509,6 +509,33 @@ function Get-ConsoleUrl([int]$Port, [string]$Token) {
     $opts = 'autoconnect=1&resize=scale&reconnect=1&reconnect_delay=2000'
     "http://127.0.0.1:$Port/vnc.html#$opts&path=websockify%3Ftoken%3D$Token"
 }
+# Launcher file for the browser (secrets/console-gcp-PORT.html, gitignored): the browser gets this
+# path instead of the URL, so the token is not in any process command line. Output: the path.
+function Write-ConsoleLauncher {
+    param(
+        [int]$Port,
+        [string]$Token,
+        [string]$Directory = (Join-Path -Path $LabRoot -ChildPath 'secrets')
+    )
+    if (-not (Test-Path -LiteralPath $Directory)) { $null = New-Item -ItemType Directory -Path $Directory }
+    $userOnly = [IO.UnixFileMode]'UserRead, UserWrite'
+    if (-not $IsWindows) { [IO.File]::SetUnixFileMode($Directory, $userOnly -bor [IO.UnixFileMode]::UserExecute) }
+    $path = Join-Path -Path $Directory -ChildPath "console-gcp-$Port.html"
+    $url = Get-ConsoleUrl -Port $Port -Token $Token
+    $html = '<!doctype html><meta charset="utf-8"><title>lab console</title>' +
+    "<script>location.replace(`"$url`")</script>`n"
+    $o = [IO.FileStreamOptions]::new()
+    $o.Mode = [IO.FileMode]::Create
+    $o.Access = [IO.FileAccess]::Write
+    if (-not $IsWindows) { $o.UnixCreateMode = $userOnly }
+    $fs = [IO.FileStream]::new($path, $o)
+    try {
+        $bytes = [Text.Encoding]::UTF8.GetBytes($html)
+        $fs.Write($bytes, 0, $bytes.Length)
+    } finally { $fs.Dispose() }
+    if (-not $IsWindows) { [IO.File]::SetUnixFileMode($path, $userOnly) }
+    $path
+}
 # The console token of the VM (its secrets/console-token); starts the VM's gateway if needed.
 function Get-ConsoleToken([string]$n) {
     $o = Get-Rcmd $n "cd $RemoteDir && ./lab console >/dev/null 2>&1; ./lab console token"
@@ -580,10 +607,12 @@ function Invoke-Tunnel([string]$key, [string[]]$Rest) {
                 Start-Sleep -Milliseconds 500
             }
             if ($proc.HasExited) { Stop-Lab "tunnel to $n stopped (exit $($proc.ExitCode))" }
-            foreach ($u in $urls[1..5]) { Start-Process -FilePath $u }
+            foreach ($p in $vnc[1..5]) {
+                Start-Process -FilePath (Write-ConsoleLauncher -Port ($p + $off) -Token $token)
+            }
             # base build console only while it runs
             if ((Invoke-WebRequestStatus "http://127.0.0.1:$(8006 + $off)/vnc.html") -eq 200) {
-                Start-Process -FilePath $urls[0]
+                Start-Process -FilePath (Write-ConsoleLauncher -Port (8006 + $off) -Token $token)
             }
             Write-LabOk 'console URLs opened in the default browser'
         }

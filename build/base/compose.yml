@@ -25,14 +25,18 @@ services:
       HOST: "LABBASE"
       LOG: "Y"
       REMOVE: "N"
-      # Port 8016 belongs to the console service (same network namespace): not forwarded to the VM.
-      HOST_PORTS: "8016"
+      # No dockur web viewer; QEMU VNC on the loopback of this network namespace only. The console
+      # service (same namespace) is the only way to the screen: it requires the console token.
+      WEB: "N"
+      DISPLAY: "vnc=127.0.0.1:0"
+      # Not forwarded to the VM: 8016 (console service), 5900 (QEMU VNC), 8006 (no listener).
+      HOST_PORTS: "8016,5900,8006"
     devices:
       - /dev/kvm
       - /dev/net/tun
     cap_add: [NET_ADMIN]
-    # Only the authenticated console is published. dockur's own web viewer (8006 in the container)
-    # and QEMU's VNC (5900) stay inside the container's network namespace.
+    # Only the authenticated console is published. QEMU's VNC listens on 127.0.0.1:5900 inside
+    # the namespace; nothing listens on the container address except the console on 8016.
     ports:
       - "127.0.0.1:${LAB_BUILD_CONSOLE_PORT:-8006}:8016"
     volumes:
@@ -53,5 +57,15 @@ services:
     entrypoint: ["sh", "/opt/lab-console/gateway.sh"]
     command: ["8016=127.0.0.1:5900"]
     volumes:
-      - ../../lib/console:/opt/lab-console:ro
-      - ../../secrets/console-token:/run/lab/console-token:ro
+      - type: bind
+        source: ../../lib/console
+        target: /opt/lab-console
+        read_only: true
+        bind: {create_host_path: false}
+      - type: bind
+        source: ../../secrets/console-token
+        target: /run/lab/console-token
+        read_only: true
+        bind: {create_host_path: false}
+    tmpfs:
+      - /run/lab-console-tokens:mode=0700,size=64k
