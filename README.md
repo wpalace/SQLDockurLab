@@ -211,8 +211,17 @@ build/base/             stage-1 dockur compose + OEM payload (Prepare/Finalize-B
 guest/                  provisioning scripts pushed over SSH (DC, join, SQL, WSFC, HADR, AG, listener, tests)
 lib/                    common.sh (ssh/qmp/helpers), provision.sh (stage-2 orchestration)
 tests/                  validate.sh (static), e2e-fakeguest.sh + fakeguest/ (runtime pipeline e2e)
+docs/                   CI.md (CI pipeline and code checks), style/ (style guide per language)
 ci/                     GitHub Actions self-hosted runner example
 ```
+
+## Contributing and CI
+
+Every pull request runs the formatter and linter checks in `.github/workflows/standards-check.yml`
+(ruff, shfmt, ShellCheck, PSScriptAnalyzer, terraform fmt, tflint, hadolint, yamllint, compose
+config). Run the same checks locally with `tests/standards-check.sh` (`--fix` to format), and the
+full static validation with `tests/validate.sh`. Details: [docs/CI.md](docs/CI.md). Style guides:
+[docs/style/](docs/style/).
 
 ## Deployment targets
 
