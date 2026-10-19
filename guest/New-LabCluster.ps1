@@ -9,15 +9,22 @@ $nodes = @($c.nodes | ForEach-Object { $_.name })
 $existing = Get-Cluster -ErrorAction SilentlyContinue
 if (-not $existing) {
     Write-Step "Waiting for all nodes to be reachable: $($nodes -join ', ')"
-    foreach ($n in $c.nodes) { Wait-Until -What "$($n.name) SMB" -TimeoutSeconds 600 -Condition { Test-TcpPort $n.ip 445 } }
+    foreach ($n in $c.nodes) {
+        Wait-Until -What "$($n.name) SMB" -TimeoutSeconds 600 -Condition { Test-TcpPort -HostName $n.ip -Port 445 }
+    }
     Write-Step "New-Cluster $($c.clusterName) [$($c.clusterIpA), $($c.clusterIpB)]"
     New-Cluster -Name $c.clusterName -Node $nodes -StaticAddress $c.clusterIpA, $c.clusterIpB -NoStorage `
         -AdministrativeAccessPoint ActiveDirectoryAndDns -Force -WarningAction SilentlyContinue | Out-Null
 } else { Write-Ok "Cluster $($existing.Name) already exists" }
 
-Wait-Until -What 'all cluster nodes Up' -TimeoutSeconds 600 -Condition { @(Get-ClusterNode | Where-Object State -ne 'Up').Count -eq 0 }
+Wait-Until -What 'all cluster nodes Up' -TimeoutSeconds 600 -Condition {
+    @(Get-ClusterNode | Where-Object State -NE 'Up').Count -eq 0
+}
 $missing = $nodes | Where-Object { $_ -notin @(Get-ClusterNode | ForEach-Object Name) }
-foreach ($m in $missing) { Write-Step "Adding node $m"; Add-ClusterNode -Name $m -NoStorage | Out-Null }
+foreach ($m in $missing) {
+    Write-Step "Adding node $m"
+    Add-ClusterNode -Name $m -NoStorage | Out-Null
+}
 
 Write-Step 'Quorum: file share witness'
 $q = Get-ClusterQuorum
@@ -34,15 +41,16 @@ foreach ($net in Get-ClusterNetwork) {
     if ($net.Address -eq $c.netA.Split('/')[0]) { $net.Name = 'SubnetA' }
     elseif ($net.Address -eq $c.netB.Split('/')[0]) { $net.Name = 'SubnetB' }
     $net.Role = 3   # cluster and client
-    Write-Host "    network $($net.Name) $addr role=$($net.Role)"
+    Write-LabLine "    network $($net.Name) $addr role=$($net.Role)"
 }
 # Short DNS TTL for the cluster name.
-Get-ClusterResource -Name 'Cluster Name' | Set-ClusterParameter -Name HostRecordTTL -Value 60 -ErrorAction SilentlyContinue
+Get-ClusterResource -Name 'Cluster Name' |
+    Set-ClusterParameter -Name HostRecordTTL -Value 60 -ErrorAction SilentlyContinue
 
 Write-Step 'Grant the CNO rights to create computer objects (listener VCO)'
 $dn = (Get-ADDomain).DistinguishedName
 dsacls.exe "CN=Computers,$dn" /G "$($c.netbios)\$($c.clusterName)`$:CC;computer" | Out-Null
 
-Get-ClusterNode | Format-Table -AutoSize Name, State | Out-String | Write-Host
+Get-ClusterNode | Format-Table -AutoSize -Property Name, State | Out-String | Write-LabLine
 Write-Ok "Cluster $($c.clusterName) ready"
 exit 0

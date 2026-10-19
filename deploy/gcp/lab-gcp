@@ -9,12 +9,12 @@ GCP_DIR=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
 LAB_ROOT=$(cd "$GCP_DIR/../.." && pwd)
 TF_SHARED="$GCP_DIR/terraform/shared"
 TF_VMS="$GCP_DIR/terraform/vms"
-REMOTE_DIR=${LAB_GCP_REMOTE_DIR:-sql-ag-lab}   # relative to the remote home directory
+REMOTE_DIR=${LAB_GCP_REMOTE_DIR:-sql-ag-lab} # relative to the remote home directory
 export PATH="$PATH:$HOME/.local/bin:$HOME/.local/google-cloud-sdk/bin"
 
 _t() { [[ -t 1 ]] && printf '%s' "$1"; }
-log()  { printf '%s[gcp %s]%s %s\n' "$(_t $'\e[36m')" "$(date +%H:%M:%S)" "$(_t $'\e[0m')" "$*"; }
-ok()   { printf '%s  ok%s  %s\n' "$(_t $'\e[32m')" "$(_t $'\e[0m')" "$*"; }
+log() { printf '%s[gcp %s]%s %s\n' "$(_t $'\e[36m')" "$(date +%H:%M:%S)" "$(_t $'\e[0m')" "$*"; }
+ok() { printf '%s  ok%s  %s\n' "$(_t $'\e[32m')" "$(_t $'\e[0m')" "$*"; }
 warn() { printf '%s  warn%s %s\n' "$(_t $'\e[33m')" "$(_t $'\e[0m')" "$*" >&2; }
 # shellcheck source=lib/watch.sh
 source "$LAB_ROOT/lib/watch.sh"
@@ -23,14 +23,22 @@ watch_gcp() {
   watch_open "gcp-$1" "tail -n 40 -F TRANSCRIPT.md &
 while :; do ./lab gcp watch '$1'; echo '[watch] connection to the VM lost; retrying in 15 s (Ctrl-C to stop)'; sleep 15; done" "${2:-}"
 }
-die()  { printf '%s  error%s %s\n' "$(_t $'\e[31m')" "$(_t $'\e[0m')" "$*" >&2; exit 1; }
+die() {
+  printf '%s  error%s %s\n' "$(_t $'\e[31m')" "$(_t $'\e[0m')" "$*" >&2
+  exit 1
+}
 # shellcheck source=lib/password.sh
 source "$LAB_ROOT/lib/password.sh"
 # LAB_PASSWORD of this workstation: lab.env, overridden by lab.local.env (gitignored). Checked; dies with help.
 lab_password() {
   local p m
   # shellcheck disable=SC1091
-  p=$(set +u; source "$LAB_ROOT/lab.env" >/dev/null 2>&1; [[ -f "$LAB_ROOT/lab.local.env" ]] && source "$LAB_ROOT/lab.local.env" >/dev/null 2>&1; printf '%s' "${LAB_PASSWORD:-}")
+  p=$(
+    set +u
+    source "$LAB_ROOT/lab.env" >/dev/null 2>&1
+    [[ -f "$LAB_ROOT/lab.local.env" ]] && source "$LAB_ROOT/lab.local.env" >/dev/null 2>&1
+    printf '%s' "${LAB_PASSWORD:-}"
+  )
   m=$(password_problem "$p") || die "$m
   $LAB_PASSWORD_HELP"
   printf '%s' "$p"
@@ -94,11 +102,17 @@ USAGE
 }
 
 need() { command -v "$1" >/dev/null || die "$1 not found. ${2:-}"; }
-tf() { need terraform "Install Terraform >= 1.5 (https://developer.hashicorp.com/terraform/install)."; terraform "$@"; }
-tf_root() { case ${1:-vms} in shared) echo "$TF_SHARED" ;; vms) echo "$TF_VMS" ;; *) die "ROOT must be shared or vms" ;; esac; }
+tf() {
+  need terraform "Install Terraform >= 1.5 (https://developer.hashicorp.com/terraform/install)."
+  terraform "$@"
+}
+tf_root() { case ${1:-vms} in shared) echo "$TF_SHARED" ;; vms) echo "$TF_VMS" ;; *) die "ROOT must be shared or vms" ;; esac }
 tf_need_vars() { [[ -f "$1/terraform.tfvars" ]] || die "missing $1/terraform.tfvars: copy terraform.tfvars.example and fill it in (MAKE.md G2)"; }
 tf_out() { tf -chdir="$TF_VMS" output -raw "$1" 2>/dev/null; }
-gc() { need gcloud "Install the Google Cloud CLI (https://cloud.google.com/sdk/docs/install)."; gcloud "$@"; }
+gc() {
+  need gcloud "Install the Google Cloud CLI (https://cloud.google.com/sdk/docs/install)."
+  gcloud "$@"
+}
 
 # Project/zone: terraform outputs of the vms root, else environment.
 ctx() {
@@ -107,26 +121,47 @@ ctx() {
   PREFIX=${GCP_NAME_PREFIX:-sqlag}
   [[ -n $PROJECT && -n $ZONE ]] || die "unknown project/zone: run ./lab gcp apply first, or set GCP_PROJECT and GCP_ZONE"
 }
-vm_name() {  # key (bill-1) or GCE name; a vms entry with name = "..." maps its key to that name
+vm_name() { # key (bill-1) or GCE name; a vms entry with name = "..." maps its key to that name
   local n=${1:?VM required} m
-  [[ $n == "$PREFIX"-* ]] && { echo "$n"; return; }
-  spawned_edit has "$n" 2>/dev/null && { echo "$n"; return; }   # spawned: key = exact GCE name
+  [[ $n == "$PREFIX"-* ]] && {
+    echo "$n"
+    return
+  }
+  spawned_edit has "$n" 2>/dev/null && {
+    echo "$n"
+    return
+  } # spawned: key = exact GCE name
   m=$(tf_out vm_lines 2>/dev/null | awk -v k="$n" '$1 == k || $2 == k {print $2; exit}') || true
   echo "${m:-$PREFIX-$n}"
 }
 gssh() { # NAME [ssh args...]
-  local n=$1; shift
+  local n=$1
+  shift
   gc compute ssh "$n" --project "$PROJECT" --zone "$ZONE" --tunnel-through-iap --quiet "$@"
 }
-rcmd() { local n=$1; shift; gssh "$n" --command "$*"; }
+rcmd() {
+  local n=$1
+  shift
+  gssh "$n" --command "$*"
+}
 
 cmd_tf() { # ACTION ROOT
-  local action=$1 dir; dir=$(tf_root "${2:-vms}")
+  local action=$1 dir
+  dir=$(tf_root "${2:-vms}")
   case $action in
     init) tf -chdir="$dir" init -upgrade ;;
-    plan) tf_need_vars "$dir"; tf -chdir="$dir" plan ;;
-    apply) tf_need_vars "$dir"; tf -chdir="$dir" apply "${@:3}" ;;  # agents: add -auto-approve
-    destroy) tf_need_vars "$dir"; tf -chdir="$dir" destroy ;;
+    plan)
+      tf_need_vars "$dir"
+      tf -chdir="$dir" plan
+      ;;
+    apply)
+      tf_need_vars "$dir"
+      tf -chdir="$dir" apply "${@:3}"
+      ;; # agents: add -auto-approve
+    destroy)
+      tf_need_vars "$dir"
+      tf -chdir="$dir" destroy
+      ;;
   esac
 }
 cmd_tf_check() {
@@ -141,8 +176,16 @@ cmd_tf_check() {
 }
 # A -target apply/destroy leaves the root outputs (vm_lines) stale: refresh them afterwards.
 tf_refresh_outputs() { tf -chdir="$TF_VMS" apply -refresh-only -auto-approve -input=false >/dev/null || warn "could not refresh terraform outputs"; }
-cmd_create() { local k=${1:?usage: create KEY}; tf_need_vars "$TF_VMS"; tf -chdir="$TF_VMS" apply -target="google_compute_instance.lab[\"$k\"]" && tf_refresh_outputs; }
-cmd_delete() { local k=${1:?usage: delete KEY}; tf_need_vars "$TF_VMS"; tf -chdir="$TF_VMS" destroy -target="google_compute_instance.lab[\"$k\"]" && tf_refresh_outputs; }
+cmd_create() {
+  local k=${1:?usage: create KEY}
+  tf_need_vars "$TF_VMS"
+  tf -chdir="$TF_VMS" apply -target="google_compute_instance.lab[\"$k\"]" && tf_refresh_outputs
+}
+cmd_delete() {
+  local k=${1:?usage: delete KEY}
+  tf_need_vars "$TF_VMS"
+  tf -chdir="$TF_VMS" destroy -target="google_compute_instance.lab[\"$k\"]" && tf_refresh_outputs
+}
 
 cmd_list() {
   ctx
@@ -152,51 +195,82 @@ cmd_list() {
 
 # ----------------------------------------------------------------------------- check --
 cmd_check() {
-  ctx; local n; n=$(vm_name "$1"); local fails=0
+  ctx
+  local n
+  n=$(vm_name "$1")
+  local fails=0
   log "GCE settings of $n"
-  local d; d=$(gc compute instances describe "$n" --project "$PROJECT" --zone "$ZONE" \
+  local d
+  d=$(gc compute instances describe "$n" --project "$PROJECT" --zone "$ZONE" \
     --format="value(status,advancedMachineFeatures.enableNestedVirtualization,minCpuPlatform,cpuPlatform,machineType.basename(),scheduling.provisioningModel,networkInterfaces[0].accessConfigs[0].natIP)") \
     || die "VM $n not found in $PROJECT/$ZONE"
   local status nested minp cpup mtype model natip
   IFS=$'\t' read -r status nested minp cpup mtype model natip <<<"$d"
-  [[ $status == RUNNING ]] && ok "status RUNNING" || { warn "status $status: run ./lab gcp start $1"; fails=$((fails + 1)); }
-  [[ ${nested,,} == true ]] && ok "enableNestedVirtualization=true" \
-    || { warn "nested virtualization OFF: set enable_nested_virtualization (terraform vms root) and apply"; fails=$((fails + 1)); }
-  [[ -n $minp ]] && ok "minCpuPlatform=$minp (running on $cpup)" || warn "no minCpuPlatform: checkpoints may not restore on other CPUs"
-  case $mtype in e2-*|n2d-*|c2d-*|c3d-*|c4d-*|t2d-*|t2a-*|c4a-*) warn "$mtype does not support nested virtualization"; fails=$((fails + 1)) ;;
-    *) ok "machine type $mtype ($model)" ;; esac
-  [[ -z $natip ]] && ok "no external IP (IAP only)" || warn "external IP $natip present"
-  local line; line=$(tf_out vm_lines | awk -v n="$n" '$2 == n') || true
+  if [[ $status == RUNNING ]]; then
+    ok "status RUNNING"
+  else
+    warn "status $status: run ./lab gcp start $1"
+    fails=$((fails + 1))
+  fi
+  if [[ ${nested,,} == true ]]; then
+    ok "enableNestedVirtualization=true"
+  else
+    warn "nested virtualization OFF: set enable_nested_virtualization (terraform vms root) and apply"
+    fails=$((fails + 1))
+  fi
+  if [[ -n $minp ]]; then ok "minCpuPlatform=$minp (running on $cpup)"; else warn "no minCpuPlatform: checkpoints may not restore on other CPUs"; fi
+  case $mtype in e2-* | n2d-* | c2d-* | c3d-* | c4d-* | t2d-* | t2a-* | c4a-*)
+    warn "$mtype does not support nested virtualization"
+    fails=$((fails + 1))
+    ;;
+  *) ok "machine type $mtype ($model)" ;; esac
+  if [[ -z $natip ]]; then ok "no external IP (IAP only)"; else warn "external IP $natip present"; fi
+  local line
+  line=$(tf_out vm_lines | awk -v n="$n" '$2 == n') || true
   if [[ -n $line ]]; then
-    local _k _n emt emp; read -r _k _n emt emp <<<"$line"; emp=${emp//_/ }
-    [[ $emt == "$mtype" ]] && ok "machine type matches terraform" || warn "machine type $mtype, terraform says $emt"
-    [[ $emp == "$minp" ]] && ok "min CPU platform matches terraform" || warn "min CPU platform '$minp', terraform says '$emp'"
+    local _k _n emt emp
+    read -r _k _n emt emp <<<"$line"
+    emp=${emp//_/ }
+    if [[ $emt == "$mtype" ]]; then ok "machine type matches terraform"; else warn "machine type $mtype, terraform says $emt"; fi
+    if [[ $emp == "$minp" ]]; then ok "min CPU platform matches terraform"; else warn "min CPU platform '$minp', terraform says '$emp'"; fi
   else warn "$n is not in the terraform vms outputs (created by hand?)"; fi
-  (( fails == 0 )) || die "fix the GCE settings above first"
+  ((fails == 0)) || die "fix the GCE settings above first"
   log "prerequisites on the VM"
   gc compute scp --project "$PROJECT" --zone "$ZONE" --tunnel-through-iap --quiet "$GCP_DIR/vm-check.sh" "$n:/tmp/vm-check.sh"
   rcmd "$n" "bash /tmp/vm-check.sh" || die "VM prerequisites failed (see FAIL lines)"
-  if rcmd "$n" "test -x $REMOTE_DIR/lab"; then log "./lab doctor on the VM"; rcmd "$n" "cd $REMOTE_DIR && ./lab doctor" || die "./lab doctor reported problems"
+  if rcmd "$n" "test -x $REMOTE_DIR/lab"; then
+    log "./lab doctor on the VM"
+    rcmd "$n" "cd $REMOTE_DIR && ./lab doctor" || die "./lab doctor reported problems"
   else warn "repository not on the VM yet: run ./lab gcp push $1, then check again"; fi
   ok "$n is ready for the lab"
 }
 
 # ------------------------------------------------------------------------ push/deploy --
 cmd_push() {
-  ctx; local n; n=$(vm_name "$1")
+  ctx
+  local n
+  n=$(vm_name "$1")
   git -C "$LAB_ROOT" diff --quiet HEAD -- || warn "uncommitted changes are NOT copied (commit first)"
-  local pw; pw=$(lab_password)   # fail fast before copying anything
-  local b; b=$(mktemp -d)/sql-ag-lab.bundle; local br; br=$(git -C "$LAB_ROOT" rev-parse --abbrev-ref HEAD)
+  local pw
+  pw=$(lab_password) # fail fast before copying anything
+  local b
+  b=$(mktemp -d)/sql-ag-lab.bundle
+  local br
+  br=$(git -C "$LAB_ROOT" rev-parse --abbrev-ref HEAD)
   git -C "$LAB_ROOT" bundle create "$b" HEAD "$br" 2>/dev/null
   # The password goes in a mode-600 file (never on a command line) to lab.local.env on the VM.
-  ( umask 077; printf "LAB_PASSWORD='%s'\n" "$pw" > "$(dirname "$b")/lab-password.env" )
+  (
+    umask 077
+    printf "LAB_PASSWORD='%s'\n" "$pw" >"$(dirname "$b")/lab-password.env"
+  )
   gc compute scp --project "$PROJECT" --zone "$ZONE" --tunnel-through-iap --quiet "$b" "$(dirname "$b")/lab-password.env" "$n:/tmp/"
   rcmd "$n" "set -e; id -nG | grep -qw docker || sudo usermod -aG docker \"\$USER\"
     if [ -d $REMOTE_DIR/.git ]; then git -C $REMOTE_DIR pull --ff-only /tmp/sql-ag-lab.bundle $br
     else git clone -q -b $br /tmp/sql-ag-lab.bundle $REMOTE_DIR; fi
     $(remote_password_merge)
     git -C $REMOTE_DIR log --oneline -1"
-  rm -rf "$(dirname "$b")"; ok "repository on $n:~/$REMOTE_DIR (reconnect once so group docker applies)"
+  rm -rf "$(dirname "$b")"
+  ok "repository on $n:~/$REMOTE_DIR (reconnect once so group docker applies)"
 }
 # Remote shell: move /tmp/lab-password.env into lab.local.env (replace the LAB_PASSWORD line), mode 600.
 remote_password_merge() {
@@ -204,41 +278,71 @@ remote_password_merge() {
     { grep -v '^LAB_PASSWORD=' $REMOTE_DIR/lab.local.env || true; cat /tmp/lab-password.env; } > $REMOTE_DIR/lab.local.env.new
     mv $REMOTE_DIR/lab.local.env.new $REMOTE_DIR/lab.local.env; chmod 600 $REMOTE_DIR/lab.local.env; rm -f /tmp/lab-password.env /tmp/sql-ag-lab.bundle"
 }
-cmd_key() {  # key push|fetch|check VM | key status
-  ctx; local a=${1:-}; shift || true
+cmd_key() { # key push|fetch|check VM | key status
+  ctx
+  local a=${1:-}
+  shift || true
   case $a in
-    push|fetch|check) local n; n=$(vm_name "${1:?usage: key $a VM}"); shift
-      rcmd "$n" "cd $REMOTE_DIR && deploy/gcp/artifacts.sh key $a $*" ;;
+    push | fetch | check)
+      local n
+      n=$(vm_name "${1:?usage: key $a VM}")
+      shift
+      rcmd "$n" "cd $REMOTE_DIR && deploy/gcp/artifacts.sh key $a $*"
+      ;;
     status) gc secrets versions list "${PREFIX}-lab-ssh-key" --project "$PROJECT" --format='table(name.basename():label=VERSION,state,createTime.date(tz=LOCAL))' ;;
     *) die "usage: key push|fetch|check VM | key status" ;;
   esac
 }
 cmd_deploy() {
-  ctx; local n; n=$(vm_name "$1"); shift
+  ctx
+  local n
+  n=$(vm_name "$1")
+  shift
   rcmd "$n" "cd $REMOTE_DIR && setsid -f nohup deploy/gcp/remote-deploy.sh $* > logs-gcp-deploy.log 2>&1 < /dev/null; sleep 2; tail -3 logs-gcp-deploy.log" || warn "could not read the deploy log yet (the deploy runs on the VM)"
   ok "deploy started on $n. Follow it: ./lab gcp watch $1   Consoles: ./lab gcp tunnel $1"
   watch_gcp "$1"
 }
-cmd_watch() { ctx; local n; n=$(vm_name "$1"); gssh "$n" --command "tail -n 40 -F $REMOTE_DIR/logs-gcp-deploy.log $REMOTE_DIR/logs/progress.log" -- -t; }
+cmd_watch() {
+  ctx
+  local n
+  n=$(vm_name "$1")
+  gssh "$n" --command "tail -n 40 -F $REMOTE_DIR/logs-gcp-deploy.log $REMOTE_DIR/logs/progress.log" -- -t
+}
 
 port_busy() { (exec 3<>"/dev/tcp/127.0.0.1/$1") 2>/dev/null; }
 cmd_tunnel() {
-  ctx; local n; n=$(vm_name "$1"); shift; local sql=0 socks="" off="" p
-  while (( $# )); do case $1 in --sql) sql=1 ;; --socks) socks=$2; shift ;; --offset) off=$2; shift ;; *) die "unknown option $1" ;; esac; shift; done
-  if [[ -z $off ]]; then  # a local lab on this machine uses the same ports: shift the forwards
-    off=0; for p in 8006 6111 6112 6113 6114 6115; do port_busy "$p" && off=10000; done
-    (( off )) && warn "local ports 8006/6111-6115 are in use (local lab?): forwarding to local port + $off"
+  ctx
+  local n
+  n=$(vm_name "$1")
+  shift
+  local sql=0 socks="" off="" p
+  while (($#)); do
+    case $1 in --sql) sql=1 ;; --socks)
+      socks=$2
+      shift
+      ;;
+    --offset)
+      off=$2
+      shift
+      ;;
+    *) die "unknown option $1" ;; esac
+    shift
+  done
+  if [[ -z $off ]]; then # a local lab on this machine uses the same ports: shift the forwards
+    off=0
+    for p in 8006 6111 6112 6113 6114 6115; do port_busy "$p" && off=10000; done
+    ((off)) && warn "local ports 8006/6111-6115 are in use (local lab?): forwarding to local port + $off"
   fi
-  local f=(-N -L "$((8006+off)):127.0.0.1:8006")
-  for p in 6111 6112 6113 6114 6115; do f+=(-L "$((p+off)):127.0.0.1:$p"); done
-  if (( sql )); then  # the lab networks exist only on the VM: forward each SQL endpoint
+  local f=(-N -L "$((8006 + off)):127.0.0.1:8006")
+  for p in 6111 6112 6113 6114 6115; do f+=(-L "$((p + off)):127.0.0.1:$p"); done
+  if ((sql)); then # the lab networks exist only on the VM: forward each SQL endpoint
     f+=(-L 14330:10.50.0.60:1433 -L 14339:10.51.0.60:1433 -L 14331:10.50.0.11:1433 -L 14332:10.50.0.12:1433 -L 14333:10.51.0.13:1433 -L 14334:10.51.0.14:1433)
   fi
   [[ -n $socks ]] && f+=(-D "$socks")
   log "tunnel to $n (Ctrl-C to stop)"
-  echo "  base build console  http://127.0.0.1:$((8006+off))"
-  for p in 6111 6112 6113 6114 6115; do echo "  VM console          http://127.0.0.1:$((p+off))/vnc.html?autoconnect=1&resize=scale&reconnect=1"; done
-  if (( sql )); then
+  echo "  base build console  http://127.0.0.1:$((8006 + off))"
+  for p in 6111 6112 6113 6114 6115; do echo "  VM console          http://127.0.0.1:$((p + off))/vnc.html?autoconnect=1&resize=scale&reconnect=1"; done
+  if ((sql)); then
     echo "  SQL listener        127.0.0.1,14330 (subnet A IP; use 14339 when the primary is on SQL3/SQL4)"
     echo "  SQL1..SQL4          127.0.0.1,14331 .. 127.0.0.1,14334 (SQL auth; see ./lab info on the VM)"
   fi
@@ -246,8 +350,11 @@ cmd_tunnel() {
   gssh "$n" -- -o ExitOnForwardFailure=yes "${f[@]}"
 }
 
-cmd_snapshot() {  # snapshot of a STOPPED VM's boot disk, for clones (vms entry: source_snapshot = NAME)
-  ctx; local n; n=$(vm_name "$1"); local snap=${2:-$n-snap-$(date +%Y%m%d-%H%M)}
+cmd_snapshot() { # snapshot of a STOPPED VM's boot disk, for clones (vms entry: source_snapshot = NAME)
+  ctx
+  local n
+  n=$(vm_name "$1")
+  local snap=${2:-$n-snap-$(date +%Y%m%d-%H%M)}
   [[ $(gc compute instances describe "$n" --project "$PROJECT" --zone "$ZONE" --format='value(status)') == TERMINATED ]] \
     || die "$n must be stopped for a consistent snapshot: ./lab gcp stop $1"
   gc compute snapshots create "$snap" --project "$PROJECT" --source-disk "$n" --source-disk-zone "$ZONE" \
@@ -256,9 +363,14 @@ cmd_snapshot() {  # snapshot of a STOPPED VM's boot disk, for clones (vms entry:
 }
 
 cmd_image() {
-  ctx; local n; n=$(vm_name "$1"); local fam=${2:-sqlag-lab-built}
-  log "stopping $n to take a consistent disk image"; gc compute instances stop "$n" --project "$PROJECT" --zone "$ZONE"
-  local img; img="$fam-$(date +%Y%m%d-%H%M)"
+  ctx
+  local n
+  n=$(vm_name "$1")
+  local fam=${2:-sqlag-lab-built}
+  log "stopping $n to take a consistent disk image"
+  gc compute instances stop "$n" --project "$PROJECT" --zone "$ZONE"
+  local img
+  img="$fam-$(date +%Y%m%d-%H%M)"
   gc compute images create "$img" --project "$PROJECT" --source-disk "$n" --source-disk-zone "$ZONE" --family "$fam" \
     --labels app=sql-ag-lab
   ok "image $img (family $fam). New VMs from it: set image = \"projects/$PROJECT/global/images/family/$fam\" in vms terraform.tfvars"
@@ -266,68 +378,99 @@ cmd_image() {
 
 # --------------------------------------------------------------- golden snapshot flow --
 # build -> test (./lab gcp test) -> golden snapshot (./lab gcp golden; stops the VM) -> spawn clones.
-STATE_DIR_GCP="$GCP_DIR/state"; GOLDEN_FILE="$STATE_DIR_GCP/golden-snapshot"
+STATE_DIR_GCP="$GCP_DIR/state"
+GOLDEN_FILE="$STATE_DIR_GCP/golden-snapshot"
 SPAWNED_JSON="$TF_VMS/spawned.auto.tfvars.json"
-note() {  # progress log + transcript line on this machine
+note() { # progress log + transcript line on this machine
   "$LAB_ROOT/lab" log "gcp: $*" >/dev/null 2>&1 || true
-  printf -- '- %s %s\n' "$(date '+%F %H:%M %Z')" "$*" >> "$LAB_ROOT/TRANSCRIPT.md"
+  printf -- '- %s %s\n' "$(date '+%F %H:%M %Z')" "$*" >>"$LAB_ROOT/TRANSCRIPT.md"
 }
-latest_golden() {  # recorded name, else the newest snapshot labelled kind=golden
-  [[ -s $GOLDEN_FILE ]] && { head -1 "$GOLDEN_FILE"; return; }
+latest_golden() { # recorded name, else the newest snapshot labelled kind=golden
+  [[ -s $GOLDEN_FILE ]] && {
+    head -1 "$GOLDEN_FILE"
+    return
+  }
   gc compute snapshots list --project "$PROJECT" --filter="labels.app=sql-ag-lab AND labels.kind=golden" \
     --sort-by=~creationTimestamp --limit 1 --format='value(name)' 2>/dev/null
 }
-wait_ready() {  # SSH works and the startup script finished on this boot
+wait_ready() { # SSH works and the startup script finished on this boot
   local n=$1
   for _ in $(seq 1 120); do
     rcmd "$n" "test -f /var/lib/sql-ag-lab/startup.done && grep -q '^LAB_GCP_NAME=$n\$' /etc/sql-ag-lab/gcp.env" >/dev/null 2>&1 && return 0
     sleep 5
-  done; die "$n: no SSH / startup script after 10 min (see /var/log/sql-ag-lab-startup.log)"
+  done
+  die "$n: no SSH / startup script after 10 min (see /var/log/sql-ag-lab-startup.log)"
 }
 
-cmd_test() {  # run MAKE.md TC1-TC9 on the VM; exit 0 only if ALL pass
-  ctx; local n; n=$(vm_name "$1"); local t0=$SECONDS
-  watch_gcp "$1"; note "tests started on $n"
+cmd_test() { # run MAKE.md TC1-TC9 on the VM; exit 0 only if ALL pass
+  ctx
+  local n
+  n=$(vm_name "$1")
+  local t0=$SECONDS
+  watch_gcp "$1"
+  note "tests started on $n"
   rcmd "$n" "cd $REMOTE_DIR && rm -f logs/tests.passed && setsid -f nohup tests/run-tcs.sh > logs/tests.log 2>&1 < /dev/null"
   local r=""
   while :; do
     sleep 20
     r=$(rcmd "$n" "grep -E '^(ALL TESTS PASSED|TESTS FAILED)' $REMOTE_DIR/logs/tests.log" 2>/dev/null) || true
     [[ -n $r ]] && break
-    (( SECONDS - t0 > 3600 )) && die "tests on $n did not finish in 60 min"
+    ((SECONDS - t0 > 3600)) && die "tests on $n did not finish in 60 min"
   done
   rcmd "$n" "grep -E '^(RESULT|TOTAL)' $REMOTE_DIR/logs/tests.log"
-  if [[ $r == "ALL TESTS PASSED" ]]; then note "tests on $n: ALL TESTS PASSED ($((SECONDS - t0)) s)"; ok "all tests passed on $n"
-  else note "tests on $n: FAILED, no golden snapshot"; die "tests failed on $n (see ~/$REMOTE_DIR/logs/tests.log). No snapshot."; fi
+  if [[ $r == "ALL TESTS PASSED" ]]; then
+    note "tests on $n: ALL TESTS PASSED ($((SECONDS - t0)) s)"
+    ok "all tests passed on $n"
+  else
+    note "tests on $n: FAILED, no golden snapshot"
+    die "tests failed on $n (see ~/$REMOTE_DIR/logs/tests.log). No snapshot."
+  fi
 }
 
-cmd_golden() {  # final build step: only after a test pass; stops the VM, snapshots the disk, records 'latest'
-  ctx; local n; n=$(vm_name "$1"); local snap=${2:-sqlag-golden-$(date +%Y%m%d-%H%M)}
+cmd_golden() { # final build step: only after a test pass; stops the VM, snapshots the disk, records 'latest'
+  ctx
+  local n
+  n=$(vm_name "$1")
+  local snap=${2:-sqlag-golden-$(date +%Y%m%d-%H%M)}
   local info
   info=$(rcmd "$n" "cd $REMOTE_DIR && test -f logs/tests.passed && test logs/tests.passed -nt images/checkpoints/golden/meta.env && grep -h '^FINGERPRINT=' images/checkpoints/golden/meta.env && git rev-parse --short HEAD" 2>/dev/null) \
-    || { note "golden snapshot of $n REFUSED: no current test pass"; die "no current test pass on $n: run ./lab gcp test $1 first (the snapshot is only made after ALL tests pass)"; }
-  local fp commit; fp=$(sed -n 's/^FINGERPRINT=//p' <<<"$info"); commit=$(tail -1 <<<"$info")
+    || {
+      note "golden snapshot of $n REFUSED: no current test pass"
+      die "no current test pass on $n: run ./lab gcp test $1 first (the snapshot is only made after ALL tests pass)"
+    }
+  local fp commit
+  fp=$(sed -n 's/^FINGERPRINT=//p' <<<"$info")
+  commit=$(tail -1 <<<"$info")
   log "stopping the lab and $n for a consistent disk"
   rcmd "$n" "cd $REMOTE_DIR && ./lab down" >/dev/null || true
-  gc compute instances stop "$n" --project "$PROJECT" --zone "$ZONE" --quiet  # the VM is TERMINATED after this: no separate stop step
+  gc compute instances stop "$n" --project "$PROJECT" --zone "$ZONE" --quiet # the VM is TERMINATED after this: no separate stop step
   local t0=$SECONDS
   gc compute snapshots create "$snap" --project "$PROJECT" --source-disk "$n" --source-disk-zone "$ZONE" \
     --storage-location "${ZONE%-*}" --description "sql-ag-lab golden from $n, commit $commit, checkpoint fingerprint $fp" \
     --labels "app=sql-ag-lab,kind=golden,source=$n,fp=${fp,,},commit=${commit,,}"
-  mkdir -p "$STATE_DIR_GCP"; printf '%s\n' "$snap" > "$GOLDEN_FILE"
+  mkdir -p "$STATE_DIR_GCP"
+  printf '%s\n' "$snap" >"$GOLDEN_FILE"
   note "golden snapshot $snap of $n ($((SECONDS - t0)) s; fingerprint $fp, commit $commit); recorded as latest; $n is TERMINATED"
   ok "golden snapshot $snap (latest). Spawn clones: ./lab gcp spawn NAME"
 }
 cmd_finish() { cmd_test "$1" && cmd_golden "$@"; }
 
 cmd_snapshots() {
-  ctx; log "golden snapshots (latest: $(latest_golden))"
+  ctx
+  log "golden snapshots (latest: $(latest_golden))"
   gc compute snapshots list --project "$PROJECT" --filter="labels.app=sql-ag-lab" --sort-by=~creationTimestamp \
     --format="table(name,creationTimestamp.date('%Y-%m-%d %H:%M'),diskSizeGb,storageBytes.size(units_out=G):label=STORED_GB,labels.kind,labels.source,labels.fp)"
 }
-cmd_use_snapshot() { ctx; local s=${1:?usage: use-snapshot NAME}; gc compute snapshots describe "$s" --project "$PROJECT" --format='value(name)' >/dev/null || die "no snapshot $s"; mkdir -p "$STATE_DIR_GCP"; echo "$s" > "$GOLDEN_FILE"; ok "latest golden snapshot: $s"; }
+cmd_use_snapshot() {
+  ctx
+  local s=${1:?usage: use-snapshot NAME}
+  gc compute snapshots describe "$s" --project "$PROJECT" --format='value(name)' >/dev/null || die "no snapshot $s"
+  mkdir -p "$STATE_DIR_GCP"
+  echo "$s" >"$GOLDEN_FILE"
+  ok "latest golden snapshot: $s"
+}
 
-spawned_edit() {  # spawned_edit add NAME JSON | del NAME
+spawned_edit() { # spawned_edit add NAME JSON | del NAME
   python3 - "$SPAWNED_JSON" "$@" <<'PY'
 import json, os, sys
 f, op, name = sys.argv[1:4]
@@ -340,16 +483,37 @@ json.dump(d, open(f, "w"), indent=2); open(f, "a").write("\n")
 PY
 }
 
-cmd_spawn() {  # spawn NAME [--disk-type T] [--snapshot S] [--machine-type M] [--owner O] [--no-up]
-  ctx; local name=${1:?usage: spawn NAME [--disk-type pd-ssd|pd-standard|pd-balanced] [--snapshot S] [--no-up]}; shift
+cmd_spawn() { # spawn NAME [--disk-type T] [--snapshot S] [--machine-type M] [--owner O] [--no-up]
+  ctx
+  local name=${1:?usage: spawn NAME [--disk-type pd-ssd|pd-standard|pd-balanced] [--snapshot S] [--no-up]}
+  shift
   local dtype="" snap="" mtype="" owner=${LAB_GCP_OWNER:-$(id -un | tr -cd 'a-z0-9-' | cut -c1-30)} up=1
-  while (( $# )); do case $1 in
-    --disk-type) dtype=$2; shift ;; --snapshot) snap=$2; shift ;; --machine-type) mtype=$2; shift ;;
-    --owner) owner=$2; shift ;; --no-up) up=0 ;; *) die "unknown option $1" ;; esac; shift; done
+  while (($#)); do
+    case $1 in
+      --disk-type)
+        dtype=$2
+        shift
+        ;;
+      --snapshot)
+        snap=$2
+        shift
+        ;;
+      --machine-type)
+        mtype=$2
+        shift
+        ;;
+      --owner)
+        owner=$2
+        shift
+        ;;
+      --no-up) up=0 ;; *) die "unknown option $1" ;; esac
+    shift
+  done
   [[ $name =~ ^[a-z]([-a-z0-9]{0,61}[a-z0-9])?$ ]] || die "NAME must be a GCE name (lowercase letters, digits, hyphens)"
   tf_out vm_lines | awk '{print $1; print $2}' | grep -qx "$name" && ! spawned_edit has "$name" \
     && die "$name is a VM from terraform.tfvars (vms); spawn only makes new clones"
-  [[ -n $snap ]] || snap=$(latest_golden); [[ -n $snap ]] || die "no golden snapshot: run ./lab gcp finish VM (or use-snapshot NAME)"
+  [[ -n $snap ]] || snap=$(latest_golden)
+  [[ -n $snap ]] || die "no golden snapshot: run ./lab gcp finish VM (or use-snapshot NAME)"
   local t0=$SECONDS entry
   entry=$(python3 -c 'import json,sys; o,s,d,m=sys.argv[1:5]; e={"owner":o,"source_snapshot":s,"publisher":False}
 d and e.update(disk_type=d); m and e.update(machine_type=m); print(json.dumps(e))' "$owner" "$snap" "$dtype" "$mtype")
@@ -357,27 +521,33 @@ d and e.update(disk_type=d); m and e.update(machine_type=m); print(json.dumps(e)
   note "spawn $name from $snap (disk ${dtype:-pd-balanced default})"
   tf -chdir="$TF_VMS" apply -auto-approve -target="google_compute_instance.lab[\"$name\"]" || die "terraform apply failed (entry kept in $SPAWNED_JSON; fix and rerun, or ./lab gcp destroy $name)"
   tf_refresh_outputs
-  local t1=$SECONDS; wait_ready "$name"; local t2=$SECONDS
+  local t1=$SECONDS
+  wait_ready "$name"
+  local t2=$SECONDS
   ok "$name created in $((t1 - t0)) s, SSH ready after $((t2 - t1)) s"
   cmd_check "$name"
-  (( up )) || return 0
+  ((up)) || return 0
   cmd_push "$name"
-  rcmd "$name" "cd $REMOTE_DIR && deploy/gcp/artifacts.sh key fetch"   # Secret Manager; must be the key in the snapshot
+  rcmd "$name" "cd $REMOTE_DIR && deploy/gcp/artifacts.sh key fetch" # Secret Manager; must be the key in the snapshot
   log "first restore of golden (a disk from a snapshot loads blocks on first read: can take minutes)"
   rcmd "$name" "cd $REMOTE_DIR && LAB_UP_TIMEOUT=1800 ./lab up golden && ./lab console >/dev/null && ./lab health --deep --wait 300"
   note "spawn $name ready at golden (create $((t1 - t0)) s, SSH $((t2 - t1)) s, golden $((SECONDS - t2)) s)"
   ok "$name is at golden. Consoles: ./lab gcp tunnel $name   Remove: ./lab gcp destroy $name"
 }
 
-cmd_destroy_vm() {  # destroy NAME [--yes]: only VMs made by spawn
-  local name=$1 yes=0; [[ ${2:-} == --yes ]] && yes=1
+cmd_destroy_vm() { # destroy NAME [--yes]: only VMs made by spawn
+  local name=$1 yes=0
+  [[ ${2:-} == --yes ]] && yes=1
   spawned_edit has "$name" || die "$name was not made by ./lab gcp spawn. VMs in terraform.tfvars (for example bill-1) are kept safe: remove them with ./lab gcp delete KEY"
-  if (( ! yes )); then
+  if ((! yes)); then
     read -r -p "Delete VM $name and its disk (data on it is lost; snapshots stay)? Type the name to confirm: " a
     [[ $a == "$name" ]] || die "not confirmed"
   fi
   tf -chdir="$TF_VMS" destroy -auto-approve -target="google_compute_instance.lab[\"$name\"]" || die "terraform destroy failed"
-  spawned_edit del "$name"; tf_refresh_outputs; note "destroyed spawned VM $name (and its boot disk)"; ok "$name deleted"
+  spawned_edit del "$name"
+  tf_refresh_outputs
+  note "destroyed spawned VM $name (and its boot disk)"
+  ok "$name deleted"
 }
 
 cmd_cost() {
@@ -393,12 +563,21 @@ COST
 }
 
 main() {
-  local c=${1:-help}; shift || true
+  local c=${1:-help}
+  shift || true
   case $c in
-    help|-h|--help) usage ;;
-    destroy) case ${1:-vms} in shared|vms) cmd_tf destroy "$@" ;; *) ctx; cmd_destroy_vm "$@" ;; esac ;;
-    init|plan) cmd_tf "$c" "$@" ;;
-    apply) local r=vms a=(); for x in "$@"; do case $x in shared|vms) r=$x ;; -y|--yes|-auto-approve) a+=(-auto-approve) ;; *) a+=("$x") ;; esac; done; cmd_tf apply "$r" "${a[@]}" ;;
+    help | -h | --help) usage ;;
+    destroy) case ${1:-vms} in shared | vms) cmd_tf destroy "$@" ;; *)
+      ctx
+      cmd_destroy_vm "$@"
+      ;;
+    esac ;;
+    init | plan) cmd_tf "$c" "$@" ;;
+    apply)
+      local r=vms a=()
+      for x in "$@"; do case $x in shared | vms) r=$x ;; -y | --yes | -auto-approve) a+=(-auto-approve) ;; *) a+=("$x") ;; esac done
+      cmd_tf apply "$r" "${a[@]}"
+      ;;
     test) cmd_test "${1:?VM required}" ;;
     golden) cmd_golden "${1:?VM required}" "${@:2}" ;;
     finish) cmd_finish "${1:?VM required}" "${@:2}" ;;
@@ -410,21 +589,52 @@ main() {
     create) cmd_create "$@" ;;
     delete) cmd_delete "$@" ;;
     list) cmd_list ;;
-    start|stop) ctx; gc compute instances "$c" "$(vm_name "${1:?VM required}")" --project "$PROJECT" --zone "$ZONE" ;;
-    ssh) ctx; local n; n=$(vm_name "${1:?VM required}"); shift; if (( $# )); then rcmd "$n" "$*"; else gssh "$n"; fi ;;
+    start | stop)
+      ctx
+      gc compute instances "$c" "$(vm_name "${1:?VM required}")" --project "$PROJECT" --zone "$ZONE"
+      ;;
+    ssh)
+      ctx
+      local n
+      n=$(vm_name "${1:?VM required}")
+      shift
+      if (($#)); then rcmd "$n" "$*"; else gssh "$n"; fi
+      ;;
     check) cmd_check "${1:?VM required}" ;;
     push) cmd_push "${1:?VM required}" ;;
     deploy) cmd_deploy "${1:?VM required}" "${@:2}" ;;
     watch) cmd_watch "${1:?VM required}" ;;
     tunnel) cmd_tunnel "${1:?VM required}" "${@:2}" ;;
     image) cmd_image "$@" ;;
-    artifacts) ctx; rcmd "$(vm_name "${1:?VM required}")" "cd $REMOTE_DIR && deploy/gcp/artifacts.sh status" ;;
+    artifacts)
+      ctx
+      rcmd "$(vm_name "${1:?VM required}")" "cd $REMOTE_DIR && deploy/gcp/artifacts.sh status"
+      ;;
     snapshot) cmd_snapshot "$@" ;;
-    watch-term) ctx; watch_gcp "${1:?VM required}" force ;;
-    publish) ctx; local n; n=$(vm_name "${1:?VM required}"); watch_gcp "$1"; shift; rcmd "$n" "cd $REMOTE_DIR && deploy/gcp/artifacts.sh publish $*" ;;
-    fetch) ctx; local n; n=$(vm_name "${1:?VM required}"); shift; rcmd "$n" "cd $REMOTE_DIR && deploy/gcp/artifacts.sh fetch $*" ;;
+    watch-term)
+      ctx
+      watch_gcp "${1:?VM required}" force
+      ;;
+    publish)
+      ctx
+      local n
+      n=$(vm_name "${1:?VM required}")
+      watch_gcp "$1"
+      shift
+      rcmd "$n" "cd $REMOTE_DIR && deploy/gcp/artifacts.sh publish $*"
+      ;;
+    fetch)
+      ctx
+      local n
+      n=$(vm_name "${1:?VM required}")
+      shift
+      rcmd "$n" "cd $REMOTE_DIR && deploy/gcp/artifacts.sh fetch $*"
+      ;;
     cost) cmd_cost ;;
-    *) usage; die "unknown command: $c" ;;
+    *)
+      usage
+      die "unknown command: $c"
+      ;;
   esac
 }
 main "$@"

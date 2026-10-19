@@ -4,14 +4,21 @@
   Precompiles .NET, shrinks the component store, trims free space, then
   sysprep /generalize /oobe /shutdown /mode:vm with the clone unattend file.
 #>
+[Diagnostics.CodeAnalysis.SuppressMessageAttribute('PSAvoidUsingWriteHost', '',
+    Justification = 'Base image build log (transcript) read by the host.')]
+[Diagnostics.CodeAnalysis.SuppressMessageAttribute('PSAvoidUsingEmptyCatchBlock', '',
+    Justification = 'Publish-Status is best effort: the host share may be unavailable.')]
+param()
 Set-StrictMode -Version Latest
 $ErrorActionPreference = 'Continue'
 $LabRoot = 'C:\Lab'
 Start-Transcript -Path "$LabRoot\logs\finalize-base.txt" -Append | Out-Null
 function Step([string]$m) { Write-Host "==> [Finalize-Base] $(Get-Date -Format s) $m" }
 function Publish-Status([string]$name) {
-    try { Set-Content "\\host.lan\Data\$name" (Get-Date -Format o) -ErrorAction Stop
-          Copy-Item "$LabRoot\logs\*" '\\host.lan\Data\' -Force -ErrorAction SilentlyContinue } catch { }
+    try {
+        Set-Content "\\host.lan\Data\$name" (Get-Date -Format o) -ErrorAction Stop
+        Copy-Item "$LabRoot\logs\*" '\\host.lan\Data\' -Force -ErrorAction SilentlyContinue
+    } catch { }
 }
 Unregister-ScheduledTask -TaskName 'LabFinalizeBase' -Confirm:$false -ErrorAction SilentlyContinue
 Start-Sleep -Seconds 30   # let boot-time services settle
@@ -32,7 +39,8 @@ Step 'Component store cleanup (smaller base image)'
 & dism.exe /Online /Cleanup-Image /StartComponentCleanup /ResetBase /Quiet | Out-Null
 
 Step 'Remove build user'
-Get-CimInstance Win32_UserProfile | Where-Object { $_.LocalPath -like '*\labbuild' } | Remove-CimInstance -ErrorAction SilentlyContinue
+Get-CimInstance Win32_UserProfile | Where-Object { $_.LocalPath -like '*\labbuild' } |
+    Remove-CimInstance -ErrorAction SilentlyContinue
 Remove-LocalUser -Name 'labbuild' -ErrorAction SilentlyContinue
 
 Step 'Trim free space (so qemu-img convert produces a compact base)'
@@ -42,4 +50,5 @@ Remove-Item 'C:\OEM' -Recurse -Force -ErrorAction SilentlyContinue
 Step 'Sysprep'
 Publish-Status 'sysprep.started'
 Stop-Transcript | Out-Null
-& "$env:windir\System32\Sysprep\sysprep.exe" /generalize /oobe /shutdown /quiet /mode:vm "/unattend:$LabRoot\unattend-clone.final.xml"
+& "$env:windir\System32\Sysprep\sysprep.exe" /generalize /oobe /shutdown /quiet /mode:vm `
+    "/unattend:$LabRoot\unattend-clone.final.xml"

@@ -15,106 +15,196 @@
    -WaitPrimary SQLn [-Note N] [-TimeoutSeconds S]
                      wait until the listener reaches SQLn, LabDB is writable, and the row with
                      note N exists; print the time and the listener IP of the connection. #>
-param([string]$Target, [string]$SetModes, [string]$Chain, [switch]$Mark, [string]$WaitSync, [string]$WaitPrimary,
-      [string]$Note, [int]$TimeoutSeconds = 300)
+param(
+    [string]$Target,
+    [string]$SetModes,
+    [string]$Chain,
+    [switch]$Mark,
+    [string]$WaitSync,
+    [string]$WaitPrimary,
+    [string]$Note,
+    [int]$TimeoutSeconds = 300
+)
 . "$PSScriptRoot\Common.ps1"
 $c = Get-LabConfig
-$ag = $c.agName; $db = $c.agDatabase
+$ag = $c.agName
+$db = $c.agDatabase
 $listener = "tcp:$($c.listenerName).$($c.domain),$($c.listenerPort)"
-function Srv([string]$n) { $ip = ($c.nodes | Where-Object { $_.name -eq $n }).ip; if (-not $ip) { throw "unknown replica $n" }; "tcp:$ip,1433" }
+# SQL that returns the address of the current connection (shows which listener IP answered).
+$connectionIp = '(SELECT local_net_address FROM sys.dm_exec_connections WHERE session_id = @@SPID)'
+
+function Get-ReplicaServer([string]$Name) {
+    $ip = ($c.nodes | Where-Object { $_.name -eq $Name }).ip
+    if (-not $ip) { throw "unknown replica $Name" }
+    "tcp:$ip,1433"
+}
 function Get-Primary {
+    $query = 'SELECT ars.role_desc AS r FROM sys.dm_hadr_availability_replica_states ars ' +
+    "JOIN sys.availability_groups ag ON ag.group_id = ars.group_id AND ag.name = N'$ag' WHERE ars.is_local = 1"
     foreach ($n in $c.nodes.name) {
         try {
-            $r = (Invoke-LabSql -Server (Srv $n) -Query "SELECT ars.role_desc AS r FROM sys.dm_hadr_availability_replica_states ars JOIN sys.availability_groups ag ON ag.group_id = ars.group_id AND ag.name = N'$ag' WHERE ars.is_local = 1").Rows
+            $r = (Invoke-LabSql -Server (Get-ReplicaServer $n) -Query $query).Rows
             if ($r.Count -gt 0 -and $r[0].r -eq 'PRIMARY') { return $n }
-        } catch { }
+        } catch {
+            # An unreachable or restarting replica is simply not the primary; try the next one.
+            Write-Verbose "$n not reachable: $($_.Exception.Message)"
+        }
     }
     throw 'no primary replica found'
 }
-function Get-Modes([string]$primary) {
+function Get-ReplicaMode([string]$Primary) {
+    $query = 'SELECT ar.replica_server_name AS n, ar.availability_mode_desc AS a, ar.failover_mode_desc AS f ' +
+    'FROM sys.availability_replicas ar ' +
+    "JOIN sys.availability_groups ag ON ag.group_id = ar.group_id AND ag.name = N'$ag'"
     $m = @{}
-    foreach ($r in (Invoke-LabSql -Server (Srv $primary) -Query "SELECT ar.replica_server_name AS n, ar.availability_mode_desc AS a, ar.failover_mode_desc AS f FROM sys.availability_replicas ar JOIN sys.availability_groups ag ON ag.group_id = ar.group_id AND ag.name = N'$ag'").Rows) {
+    foreach ($r in (Invoke-LabSql -Server (Get-ReplicaServer $Primary) -Query $query).Rows) {
         $m[$r.n] = @{ a = $r.a; f = $r.f }
     }
     $m
 }
-function Set-Modes([hashtable]$want) {
-    $p = Get-Primary; $cur = Get-Modes $p
-    $alter = { param($n, $opt) Invoke-LabSql -Server (Srv $p) -NonQuery -Query "ALTER AVAILABILITY GROUP [$ag] MODIFY REPLICA ON N'$n' WITH ($opt);" }
-    foreach ($n in $want.Keys) { if ($want[$n].f -eq 'MANUAL' -and $cur[$n].f -ne 'MANUAL') { & $alter $n 'FAILOVER_MODE = MANUAL' } }
-    foreach ($n in $want.Keys) { if ($want[$n].a -ne $cur[$n].a) { & $alter $n "AVAILABILITY_MODE = $($want[$n].a)" } }
-    foreach ($n in $want.Keys) { if ($want[$n].f -eq 'AUTOMATIC' -and $cur[$n].f -ne 'AUTOMATIC') { & $alter $n 'FAILOVER_MODE = AUTOMATIC' } }
-    Write-Ok ("modes on $p`: " + (($want.Keys | Sort-Object | ForEach-Object { "$_=$($want[$_].a)/$($want[$_].f)" }) -join ' '))
+function Set-ReplicaMode {
+    [CmdletBinding(SupportsShouldProcess)]
+    param([hashtable]$Want)
+    $p = Get-Primary
+    $cur = Get-ReplicaMode $p
+    $summary = ($Want.Keys | Sort-Object | ForEach-Object { "$_=$($Want[$_].a)/$($Want[$_].f)" }) -join ' '
+    if (-not $PSCmdlet.ShouldProcess("availability group $ag on $p", "set replica modes $summary")) { return }
+    $alter = {
+        param($n, $opt)
+        $query = "ALTER AVAILABILITY GROUP [$ag] MODIFY REPLICA ON N'$n' WITH ($opt);"
+        Invoke-LabSql -Server (Get-ReplicaServer $p) -NonQuery -Query $query
+    }
+    # Safe order: MANUAL first, then the availability mode, then AUTOMATIC.
+    foreach ($n in $Want.Keys) {
+        if ($Want[$n].f -eq 'MANUAL' -and $cur[$n].f -ne 'MANUAL') { & $alter $n 'FAILOVER_MODE = MANUAL' }
+    }
+    foreach ($n in $Want.Keys) {
+        if ($Want[$n].a -ne $cur[$n].a) { & $alter $n "AVAILABILITY_MODE = $($Want[$n].a)" }
+    }
+    foreach ($n in $Want.Keys) {
+        if ($Want[$n].f -eq 'AUTOMATIC' -and $cur[$n].f -ne 'AUTOMATIC') {
+            & $alter $n 'FAILOVER_MODE = AUTOMATIC'
+        }
+    }
+    Write-Ok "modes on ${p}: $summary"
 }
-function Parse-Modes([string]$s) {
-    if ($s -eq 'config') { $h = @{}; foreach ($r in $c.replicas) { $h[$r.name] = @{ a = $r.availabilityMode; f = $r.failoverMode } }; return $h }
-    $h = @{}; foreach ($e in ($s -split '\s+' | Where-Object { $_ })) { $n, $a, $f = $e -split ':'; $h[$n] = @{ a = $a; f = $f } }; $h
+function ConvertTo-ReplicaMode([string]$Spec) {
+    $h = @{}
+    if ($Spec -eq 'config') {
+        foreach ($r in $c.replicas) { $h[$r.name] = @{ a = $r.availabilityMode; f = $r.failoverMode } }
+        return $h
+    }
+    foreach ($e in ($Spec -split '\s+' | Where-Object { $_ })) {
+        $n, $a, $f = $e -split ':'
+        $h[$n] = @{ a = $a; f = $f }
+    }
+    $h
 }
-function Wait-Synchronized([string]$primary, [string]$n, [int]$t = 300) {
-    Wait-Until -What "$n SYNCHRONIZED" -TimeoutSeconds $t -IntervalSeconds 1 -Condition {
-        (Invoke-LabSql -Server (Srv $primary) -Query "SELECT drs.synchronization_state_desc AS s FROM sys.dm_hadr_database_replica_states drs JOIN sys.availability_replicas ar ON ar.replica_id = drs.replica_id WHERE ar.replica_server_name = N'$n'").Rows[0].s -eq 'SYNCHRONIZED'
+function Wait-Synchronized([string]$Primary, [string]$Name, [int]$TimeoutSeconds = 300) {
+    $query = 'SELECT drs.synchronization_state_desc AS s FROM sys.dm_hadr_database_replica_states drs ' +
+    "JOIN sys.availability_replicas ar ON ar.replica_id = drs.replica_id WHERE ar.replica_server_name = N'$Name'"
+    Wait-Until -What "$Name SYNCHRONIZED" -TimeoutSeconds $TimeoutSeconds -IntervalSeconds 1 -Condition {
+        (Invoke-LabSql -Server (Get-ReplicaServer $Primary) -Query $query).Rows[0].s -eq 'SYNCHRONIZED'
     }
 }
-function Invoke-SafeFailover([string]$to) {
+function Invoke-SafeFailover([string]$To) {
     $sw = [Diagnostics.Stopwatch]::StartNew()
     $p = Get-Primary
-    if ($p -eq $to) { Write-Ok "$to is primary already"; return }
-    $orig = Get-Modes $p
-    $tmp = @{}
-    foreach ($n in @($p, $to)) { $tmp[$n] = @{ a = 'SYNCHRONOUS_COMMIT'; f = $orig[$n].f } }
-    if ($orig[$p].a -ne 'SYNCHRONOUS_COMMIT' -or $orig[$to].a -ne 'SYNCHRONOUS_COMMIT') {
-        Write-Step "temporary SYNCHRONOUS_COMMIT for $p and $to"; Set-Modes $tmp
+    if ($p -eq $To) {
+        Write-Ok "$To is primary already"
+        return
     }
-    Wait-Synchronized $p $to
-    Write-Step "FAILOVER $p -> $to"
-    Invoke-LabSql -Server (Srv $to) -NonQuery -Query "ALTER AVAILABILITY GROUP [$ag] FAILOVER;"
-    $back = @{}; foreach ($n in @($p, $to)) { $back[$n] = $orig[$n] }
-    Wait-Until -What "$to primary" -TimeoutSeconds 120 -IntervalSeconds 1 -Condition { (Get-Primary) -eq $to }
-    Set-Modes $back
-    Write-Ok ("planned failover {0} -> {1} in {2:N1} s (no data loss: target was SYNCHRONIZED)" -f $p, $to, $sw.Elapsed.TotalSeconds)
+    $orig = Get-ReplicaMode $p
+    $tmp = @{}
+    foreach ($n in @($p, $To)) { $tmp[$n] = @{ a = 'SYNCHRONOUS_COMMIT'; f = $orig[$n].f } }
+    if ($orig[$p].a -ne 'SYNCHRONOUS_COMMIT' -or $orig[$To].a -ne 'SYNCHRONOUS_COMMIT') {
+        Write-Step "temporary SYNCHRONOUS_COMMIT for $p and $To"
+        Set-ReplicaMode -Want $tmp
+    }
+    Wait-Synchronized -Primary $p -Name $To
+    Write-Step "FAILOVER $p -> $To"
+    Invoke-LabSql -Server (Get-ReplicaServer $To) -NonQuery -Query "ALTER AVAILABILITY GROUP [$ag] FAILOVER;"
+    $back = @{}
+    foreach ($n in @($p, $To)) { $back[$n] = $orig[$n] }
+    Wait-Until -What "$To primary" -TimeoutSeconds 120 -IntervalSeconds 1 -Condition { (Get-Primary) -eq $To }
+    Set-ReplicaMode -Want $back
+    Write-Ok ('planned failover {0} -> {1} in {2:N1} s (no data loss: target was SYNCHRONIZED)' -f
+        $p, $To, $sw.Elapsed.TotalSeconds)
 }
-function Add-Mark([string]$tag) {
-    $n = "$tag $([guid]::NewGuid().ToString('N').Substring(0, 12))"
+function Add-Mark([string]$Tag) {
+    $n = "$Tag $([guid]::NewGuid().ToString('N').Substring(0, 12))"
     Wait-Until -What 'listener write' -TimeoutSeconds 120 -IntervalSeconds 1 -Condition {
-        Invoke-LabSql -Server $listener -Database $db -MultiSubnetFailover -NonQuery -Query "INSERT dbo.LabHeartbeat(note) VALUES (N'$n');"; $true
+        $query = "INSERT dbo.LabHeartbeat(note) VALUES (N'$n');"
+        Invoke-LabSql -Server $listener -Database $db -MultiSubnetFailover -NonQuery -Query $query
+        $true
     }
     $n
 }
-function Test-Mark([string]$server, [string]$n, [switch]$Msf) {
-    (Invoke-LabSql -Server $server -Database $db -MultiSubnetFailover:$Msf -Query "SELECT @@SERVERNAME AS s, COUNT(*) AS n, (SELECT local_net_address FROM sys.dm_exec_connections WHERE session_id = @@SPID) AS ip FROM dbo.LabHeartbeat WHERE note = N'$n'").Rows[0]
+function Test-Mark([string]$Server, [string]$Name, [switch]$Msf) {
+    $query = "SELECT @@SERVERNAME AS s, COUNT(*) AS n, $connectionIp AS ip " +
+    "FROM dbo.LabHeartbeat WHERE note = N'$Name'"
+    (Invoke-LabSql -Server $Server -Database $db -MultiSubnetFailover:$Msf -Query $query).Rows[0]
 }
 
-if ($SetModes) { Set-Modes (Parse-Modes $SetModes) }
+if ($SetModes) { Set-ReplicaMode -Want (ConvertTo-ReplicaMode $SetModes) }
 if ($Target) { Invoke-SafeFailover $Target.ToUpper() }
-if ($WaitSync) { $p = Get-Primary; Wait-Synchronized $p $WaitSync.ToUpper(); Write-Ok "$($WaitSync.ToUpper()) SYNCHRONIZED with primary $p" }
+if ($WaitSync) {
+    $p = Get-Primary
+    Wait-Synchronized -Primary $p -Name $WaitSync.ToUpper()
+    Write-Ok "$($WaitSync.ToUpper()) SYNCHRONIZED with primary $p"
+}
 if ($Mark) { Write-Output "MARK=$(Add-Mark 'mark')" }
 if ($Chain) {
-    $all = [Diagnostics.Stopwatch]::StartNew(); $marks = @()
+    $all = [Diagnostics.Stopwatch]::StartNew()
+    $marks = @()
     foreach ($to in ($Chain -split ',')) {
-        $to = $to.Trim().ToUpper(); $sw = [Diagnostics.Stopwatch]::StartNew()
+        $to = $to.Trim().ToUpper()
+        $sw = [Diagnostics.Stopwatch]::StartNew()
         Invoke-SafeFailover $to
-        $m = Add-Mark "chain $to"; $marks += $m
-        $r = Test-Mark $listener $m -Msf
-        if ($r.s -ne $to -or $r.n -ne 1) { throw "after failover to $to the listener reached $($r.s) (rows $($r.n))" }
-        foreach ($old in $marks) { if ((Test-Mark (Srv $to) $old).n -ne 1) { throw "row '$old' missing on $to" } }
-        Write-Ok ("chain step -> {0}: listener -> {0} ({1}), heartbeat visible, {2} earlier rows intact, {3:N1} s" -f $to, $r.ip, ($marks.Count - 1), $sw.Elapsed.TotalSeconds)
+        $m = Add-Mark "chain $to"
+        $marks += $m
+        $r = Test-Mark -Server $listener -Name $m -Msf
+        if ($r.s -ne $to -or $r.n -ne 1) {
+            throw "after failover to $to the listener reached $($r.s) (rows $($r.n))"
+        }
+        foreach ($old in $marks) {
+            $found = Test-Mark -Server (Get-ReplicaServer $to) -Name $old
+            if ($found.n -ne 1) { throw "row '$old' missing on $to" }
+        }
+        $format = 'chain step -> {0}: listener -> {0} ({1}), heartbeat visible, ' +
+        '{2} earlier rows intact, {3:N1} s'
+        Write-Ok ($format -f
+            $to, $r.ip, ($marks.Count - 1), $sw.Elapsed.TotalSeconds)
     }
-    Set-Modes (Parse-Modes 'config')
-    Write-Ok ("failover chain {0} done in {1:N1} s; modes restored from lab.env" -f $Chain, $all.Elapsed.TotalSeconds)
+    Set-ReplicaMode -Want (ConvertTo-ReplicaMode 'config')
+    Write-Ok ('failover chain {0} done in {1:N1} s; modes restored from lab.env' -f
+        $Chain, $all.Elapsed.TotalSeconds)
 }
 if ($WaitPrimary) {
-    $want = $WaitPrimary.ToUpper(); $sw = [Diagnostics.Stopwatch]::StartNew(); $last = ''
+    $want = $WaitPrimary.ToUpper()
+    $sw = [Diagnostics.Stopwatch]::StartNew()
+    $last = ''
+    $query = "INSERT dbo.LabHeartbeat(note) VALUES (N'after failover'); SELECT @@SERVERNAME AS s, " +
+    "$connectionIp AS ip, (SELECT COUNT(*) FROM dbo.LabHeartbeat WHERE note = N'$Note') AS n"
     while ($true) {
         try {
-            $r = Invoke-LabSql -Server $listener -Database $db -MultiSubnetFailover -Query "INSERT dbo.LabHeartbeat(note) VALUES (N'after failover'); SELECT @@SERVERNAME AS s, (SELECT local_net_address FROM sys.dm_exec_connections WHERE session_id = @@SPID) AS ip, (SELECT COUNT(*) FROM dbo.LabHeartbeat WHERE note = N'$Note') AS n"
-            $row = $r.Rows[0]; $last = "listener -> $($row.s)"
+            $r = Invoke-LabSql -Server $listener -Database $db -MultiSubnetFailover -Query $query
+            $row = $r.Rows[0]
+            $last = "listener -> $($row.s)"
             if ($row.s -eq $want) {
                 if ($Note -and $row.n -ne 1) { throw "row '$Note' missing on $want (data loss)" }
-                Write-Output ("ONLINE primary={0} listener_ip={1} seconds={2:N1} row={3}" -f $row.s, $row.ip, $sw.Elapsed.TotalSeconds, $(if ($Note) { 'intact' } else { 'n/a' }))
+                $rowState = if ($Note) { 'intact' } else { 'n/a' }
+                Write-Output ('ONLINE primary={0} listener_ip={1} seconds={2:N1} row={3}' -f
+                    $row.s, $row.ip, $sw.Elapsed.TotalSeconds, $rowState)
                 exit 0
             }
-        } catch { if ($_.Exception.Message -like '*data loss*') { throw }; $last = $_.Exception.Message }
-        if ($sw.Elapsed.TotalSeconds -gt $TimeoutSeconds) { throw "no automatic failover to $want after ${TimeoutSeconds}s (last: $last)" }
+        } catch {
+            if ($_.Exception.Message -like '*data loss*') { throw }
+            $last = $_.Exception.Message
+        }
+        if ($sw.Elapsed.TotalSeconds -gt $TimeoutSeconds) {
+            throw "no automatic failover to $want after ${TimeoutSeconds}s (last: $last)"
+        }
         Start-Sleep -Milliseconds 500
     }
 }

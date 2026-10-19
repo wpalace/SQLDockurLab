@@ -9,10 +9,25 @@ foreach ($fw in 'Framework64', 'Framework') {
     if (Test-Path $ngen) { & $ngen executeQueuedItems /nologo /silent | Out-Null }
 }
 Write-Step 'Re-applying quiet settings (roles may have re-enabled tasks)'
-foreach ($tp in '\Microsoft\Windows\Defrag\', '\Microsoft\Windows\Server Manager\', '\Microsoft\Windows\UpdateOrchestrator\',
-                '\Microsoft\Windows\.NET Framework\', '\Microsoft\Windows\Application Experience\', '\Microsoft\Windows\Diagnosis\') {
-    Get-ScheduledTask -TaskPath $tp -ErrorAction SilentlyContinue | Where-Object State -ne 'Disabled' |
-        ForEach-Object { try { $_ | Disable-ScheduledTask | Out-Null } catch { } }
+$taskPaths = @(
+    '\Microsoft\Windows\Defrag\'
+    '\Microsoft\Windows\Server Manager\'
+    '\Microsoft\Windows\UpdateOrchestrator\'
+    '\Microsoft\Windows\.NET Framework\'
+    '\Microsoft\Windows\Application Experience\'
+    '\Microsoft\Windows\Diagnosis\'
+)
+foreach ($tp in $taskPaths) {
+    Get-ScheduledTask -TaskPath $tp -ErrorAction SilentlyContinue | Where-Object State -NE 'Disabled' |
+        ForEach-Object {
+            $task = $_ # inside catch, $_ is the error record
+            try {
+                $task | Disable-ScheduledTask | Out-Null
+            } catch {
+                # Best effort: some system tasks refuse changes; they only add noise, never block.
+                Write-Verbose "could not disable $($task.TaskName): $($_.Exception.Message)"
+            }
+        }
 }
 [GC]::Collect()
 Write-Step "Waiting for CPU idle (<10% for 20s, max ${SettleSeconds}s)"

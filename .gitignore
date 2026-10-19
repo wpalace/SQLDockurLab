@@ -16,7 +16,6 @@ lab.local.env
 **/*.tfstate
 **/*.tfstate.*
 **/backend.tf
-**/.terraform.lock.hcl
 *.log
 **/spawned.auto.tfvars.json
 deploy/gcp/state/

@@ -4,38 +4,78 @@ Set-StrictMode -Version Latest
 
 $script:Root = Split-Path -Parent $PSScriptRoot
 function Get-LabRoot { $script:Root }
-function Get-ProgressLog { if ($env:PROGRESS_LOG) { $env:PROGRESS_LOG } else { Join-Path $script:Root 'logs/progress.log' } }
+function Get-ProgressLog {
+    if ($env:PROGRESS_LOG) {
+        $env:PROGRESS_LOG
+    } else {
+        Join-Path -Path $script:Root -ChildPath 'logs/progress.log'
+    }
+}
 
 # Time stamps: "PT" when the machine clock is US Pacific (MAKE.md rule 3), else the UTC offset.
 function Get-LabZoneLabel {
     $tz = [TimeZoneInfo]::Local
     if ($tz.Id -in @('America/Los_Angeles', 'US/Pacific', 'Pacific Standard Time', 'PST8PDT')) { return 'PT' }
-    $o = $tz.GetUtcOffset([DateTime]::Now); ('UTC{0}{1:hh\:mm}' -f $(if ($o -lt [TimeSpan]::Zero) { '-' } else { '+' }), $o)
+    $o = $tz.GetUtcOffset([DateTime]::Now)
+    $sign = if ($o -lt [TimeSpan]::Zero) { '-' } else { '+' }
+    'UTC{0}{1:hh\:mm}' -f $sign, $o
 }
-function Get-LabStamp([string]$Format = 'yyyy-MM-dd HH:mm:ss') { '{0} {1}' -f (Get-Date -Format $Format), (Get-LabZoneLabel) }
+function Get-LabStamp([string]$Format = 'yyyy-MM-dd HH:mm:ss') {
+    '{0} {1}' -f (Get-Date -Format $Format), (Get-LabZoneLabel)
+}
 
 function Write-LabProgress([string]$Message) {
     $f = Get-ProgressLog
-    if (Test-Path -LiteralPath $f) { Add-Content -LiteralPath $f -Value ('{0} {1}' -f (Get-LabStamp), $Message) -Encoding utf8NoBOM }
+    if (Test-Path -LiteralPath $f) {
+        Add-Content -LiteralPath $f -Value ('{0} {1}' -f (Get-LabStamp), $Message) -Encoding utf8NoBOM
+    }
 }
 function Initialize-LabProgress {
-    $f = Get-ProgressLog; $d = Split-Path -Parent $f
+    $f = Get-ProgressLog
+    $d = Split-Path -Parent $f
     if (-not (Test-Path $d)) { New-Item -ItemType Directory -Path $d -Force | Out-Null }
     if (-not (Test-Path $f)) { New-Item -ItemType File -Path $f -Force | Out-Null }
 }
-function Write-LabLog([string]$Tag, [string]$Message) {
-    Write-Host ('[{0} {1}] ' -f $Tag, (Get-Date -Format HH:mm:ss)) -ForegroundColor Cyan -NoNewline; Write-Host $Message
+function Write-LabLog {
+    [Diagnostics.CodeAnalysis.SuppressMessageAttribute('PSAvoidUsingWriteHost', '',
+        Justification = 'Console UI of the operator front end (colored status lines).')]
+    param([string]$Tag, [string]$Message)
+    Write-Host ('[{0} {1}] ' -f $Tag, (Get-Date -Format HH:mm:ss)) -ForegroundColor Cyan -NoNewline
+    Write-Host $Message
     Write-LabProgress $Message
 }
-function Write-LabOk([string]$Message) { Write-Host '  ok  ' -ForegroundColor Green -NoNewline; Write-Host $Message; Write-LabProgress "  ok   $Message" }
-function Write-LabWarn([string]$Message) { Write-Host '  warn ' -ForegroundColor Yellow -NoNewline; Write-Host $Message; Write-LabProgress "  WARN $Message" }
+function Write-LabOk {
+    [Diagnostics.CodeAnalysis.SuppressMessageAttribute('PSAvoidUsingWriteHost', '',
+        Justification = 'Console UI of the operator front end (colored status lines).')]
+    param([string]$Message)
+    Write-Host '  ok  ' -ForegroundColor Green -NoNewline
+    Write-Host $Message
+    Write-LabProgress "  ok   $Message"
+}
+function Write-LabWarn {
+    [Diagnostics.CodeAnalysis.SuppressMessageAttribute('PSAvoidUsingWriteHost', '',
+        Justification = 'Console UI of the operator front end (colored status lines).')]
+    param([string]$Message)
+    Write-Host '  warn ' -ForegroundColor Yellow -NoNewline
+    Write-Host $Message
+    Write-LabProgress "  WARN $Message"
+}
 class LabError : System.Exception { LabError([string]$m) : base($m) {} }
-function Stop-Lab([string]$Message) { Write-LabProgress "  ERROR $Message"; throw [LabError]::new($Message) }
+function Stop-Lab {
+    [Diagnostics.CodeAnalysis.SuppressMessageAttribute('PSUseShouldProcessForStateChangingFunctions', '',
+        Justification = 'Stops the current command with a LabError; changes no system state.')]
+    param([string]$Message)
+    Write-LabProgress "  ERROR $Message"
+    throw [LabError]::new($Message)
+}
 
 # Progress-log line plus a TRANSCRIPT.md line on this machine.
 function Add-LabNote([string]$Message) {
-    Initialize-LabProgress; Write-LabProgress "gcp: $Message"
-    Add-Content -LiteralPath (Join-Path $script:Root 'TRANSCRIPT.md') -Value ('- {0} {1}' -f (Get-LabStamp 'yyyy-MM-dd HH:mm'), $Message) -Encoding utf8NoBOM
+    Initialize-LabProgress
+    Write-LabProgress "gcp: $Message"
+    $line = '- {0} {1}' -f (Get-LabStamp 'yyyy-MM-dd HH:mm'), $Message
+    $transcript = Join-Path -Path $script:Root -ChildPath 'TRANSCRIPT.md'
+    Add-Content -LiteralPath $transcript -Value $line -Encoding utf8NoBOM
 }
 
 # Text with LF line ends (for files that are copied to the Linux lab host).
@@ -51,14 +91,21 @@ function ConvertTo-LfFile([string]$Path, [string]$Destination) {
 # pwsh window. Linux: $LAB_TERMINAL, $TERMINAL, xdg-terminal-exec, then common terminals.
 function Open-LabWatch([string]$Name, [string]$Body, [switch]$Force) {
     if ($env:LAB_WATCH -eq '0' -and -not $Force) { return }
-    $dir = Join-Path $script:Root 'logs'; New-Item -ItemType Directory -Force -Path $dir | Out-Null
-    $pidf = Join-Path $dir ".watch-$Name.pid"; $script = Join-Path $dir ".watch-$Name.ps1"
-    $tr = Join-Path $script:Root 'TRANSCRIPT.md'; if (-not (Test-Path $tr)) { New-Item -ItemType File -Path $tr | Out-Null }
+    $dir = Join-Path -Path $script:Root -ChildPath 'logs'
+    New-Item -ItemType Directory -Force -Path $dir | Out-Null
+    $pidf = Join-Path -Path $dir -ChildPath ".watch-$Name.pid"
+    $script = Join-Path -Path $dir -ChildPath ".watch-$Name.ps1"
+    $tr = Join-Path -Path $script:Root -ChildPath 'TRANSCRIPT.md'
+    if (-not (Test-Path $tr)) { New-Item -ItemType File -Path $tr | Out-Null }
     if (Test-Path $pidf) {
         $old = (Get-Content -LiteralPath $pidf -Raw).Trim()
-        if ($old -and (Get-Process -Id ([int]$old) -ErrorAction SilentlyContinue)) { Write-LabOk "watch terminal already open (pid $old)"; return }
+        if ($old -and (Get-Process -Id ([int]$old) -ErrorAction SilentlyContinue)) {
+            Write-LabOk "watch terminal already open (pid $old)"
+            return
+        }
     }
-    $rootq = $script:Root.Replace("'", "''"); $pidq = $pidf.Replace("'", "''")
+    $rootq = $script:Root.Replace("'", "''")
+    $pidq = $pidf.Replace("'", "''")
     @"
 # generated by lib/LabHost.psm1: live view of the lab build (close the window to stop)
 `$PID | Set-Content -LiteralPath '$pidq'
@@ -67,23 +114,32 @@ function Open-LabWatch([string]$Name, [string]$Body, [switch]$Force) {
 Set-Location -LiteralPath '$rootq'
 try {
 $Body
-} finally { Remove-Item -LiteralPath '$pidq' -ErrorAction SilentlyContinue; Get-Job | Stop-Job -PassThru | Remove-Job -Force }
+} finally {
+    Remove-Item -LiteralPath '$pidq' -ErrorAction SilentlyContinue
+    Get-Job | Stop-Job -PassThru | Remove-Job -Force
+}
 "@ | Set-Content -LiteralPath $script -Encoding utf8NoBOM
     $pw = (Get-Process -Id $PID).Path
     if ($IsWindows) {
         if (Get-Command wt.exe -ErrorAction SilentlyContinue) {
-            Start-Process wt.exe -ArgumentList @('new-tab', '--title', "`"lab watch: $Name`"", "`"$pw`"", '-NoExit', '-File', "`"$script`"")
+            $wtArgs = @('new-tab', '--title', "`"lab watch: $Name`"", "`"$pw`"", '-NoExit', '-File', "`"$script`"")
+            Start-Process -FilePath wt.exe -ArgumentList $wtArgs
             Write-LabOk 'watch terminal opened (Windows Terminal); opt out with LAB_WATCH=0'
         } else {
-            Start-Process $pw -ArgumentList @('-NoExit', '-File', "`"$script`"")
+            Start-Process -FilePath $pw -ArgumentList @('-NoExit', '-File', "`"$script`"")
             Write-LabOk 'watch terminal opened (new pwsh window); opt out with LAB_WATCH=0'
         }
         return
     }
     if ($env:DISPLAY -or $env:WAYLAND_DISPLAY) {
-        foreach ($t in @($env:LAB_TERMINAL, $env:TERMINAL, 'xdg-terminal-exec', 'x-terminal-emulator', 'gnome-terminal', 'konsole', 'xfce4-terminal', 'ghostty', 'kitty', 'alacritty', 'foot', 'wezterm', 'xterm')) {
+        $terminals = @(
+            $env:LAB_TERMINAL, $env:TERMINAL, 'xdg-terminal-exec', 'x-terminal-emulator', 'gnome-terminal',
+            'konsole', 'xfce4-terminal', 'ghostty', 'kitty', 'alacritty', 'foot', 'wezterm', 'xterm'
+        )
+        foreach ($t in $terminals) {
             if (-not $t) { continue }
-            $exe = ($t -split ' ')[0]; if (-not (Get-Command $exe -ErrorAction SilentlyContinue)) { continue }
+            $exe = ($t -split ' ')[0]
+            if (-not (Get-Command $exe -ErrorAction SilentlyContinue)) { continue }
             $a = switch -Regex ([IO.Path]::GetFileName($exe)) {
                 '^gnome-terminal$' { @("--title=lab watch: $Name", '--', $pw, '-File', $script) }
                 '^(xdg-terminal-exec|kitty|foot|ghostty)$' { @($pw, '-File', $script) }
@@ -92,16 +148,24 @@ $Body
                 default { @('-e', $pw, '-File', $script) }
             }
             # The terminal's own diagnostics go to a log file, not to the caller's console.
-            $tlog = Join-Path $dir ".watch-$Name.terminal.log"
-            Start-Process $exe -ArgumentList $a -RedirectStandardOutput $tlog -RedirectStandardError "$tlog.err"
-            Write-LabOk "watch terminal opened ($exe); opt out with LAB_WATCH=0"; return
+            $tlog = Join-Path -Path $dir -ChildPath ".watch-$Name.terminal.log"
+            $start = @{
+                FilePath               = $exe
+                ArgumentList           = $a
+                RedirectStandardOutput = $tlog
+                RedirectStandardError  = "$tlog.err"
+            }
+            Start-Process @start
+            Write-LabOk "watch terminal opened ($exe); opt out with LAB_WATCH=0"
+            return
         }
     }
     Write-LabWarn "no graphical terminal: to watch live, run in a terminal: pwsh -File $script"
 }
 
 # ---------------------------------------------------------------- LAB_PASSWORD --
-# Same rules as lib/password.sh (bash). lab.env keeps the placeholder; lab.local.env (gitignored) has the value.
+# Same rules as lib/password.sh (bash). lab.env keeps the placeholder; lab.local.env (gitignored)
+# has the value.
 $script:PasswordPlaceholder = '<change me>'
 $script:PasswordHelp = @"
 Set the lab password in lab.local.env (gitignored; lab.env keeps the placeholder):
@@ -111,7 +175,8 @@ Set the lab password in lab.local.env (gitignored; lab.env keeps the placeholder
   The password is baked into the base image, checkpoints and golden snapshots at build time:
   a lab built with another password needs a rebuild (MAKE.md).
 "@
-function Get-LabEnvValue([string]$Name) {  # lab.env, overridden by lab.local.env; quotes removed
+function Get-LabEnvValue([string]$Name) {
+    # lab.env, overridden by lab.local.env; quotes removed
     $v = $null
     foreach ($f in 'lab.env', 'lab.local.env') {
         $p = Join-Path $script:Root $f
@@ -119,24 +184,34 @@ function Get-LabEnvValue([string]$Name) {  # lab.env, overridden by lab.local.en
         foreach ($l in Get-Content $p) {
             if ($l -match "^\s*$([regex]::Escape($Name))=(.*)$") {
                 $x = $Matches[1].Trim()
-                if ($x.Length -ge 2 -and (($x[0] -eq "'" -and $x[-1] -eq "'") -or ($x[0] -eq '"' -and $x[-1] -eq '"'))) { $x = $x.Substring(1, $x.Length - 2) }
+                $quoted = ($x[0] -eq "'" -and $x[-1] -eq "'") -or ($x[0] -eq '"' -and $x[-1] -eq '"')
+                if ($x.Length -ge 2 -and $quoted) { $x = $x.Substring(1, $x.Length - 2) }
                 $v = $x
             }
         }
     }
     $v
 }
-function Get-LabPasswordProblem([AllowEmptyString()][AllowNull()][string]$Value) {  # $null when valid (plain text: it goes into env files)
+function Get-LabPasswordProblem([AllowEmptyString()][AllowNull()][string]$Value) {
+    # $null when valid (plain text: it goes into env files)
     $p = [string]$Value
-    if (-not $p -or $p -eq $script:PasswordPlaceholder) { return "LAB_PASSWORD is not set (empty or the placeholder $script:PasswordPlaceholder)" }
+    if (-not $p -or $p -eq $script:PasswordPlaceholder) {
+        return "LAB_PASSWORD is not set (empty or the placeholder $script:PasswordPlaceholder)"
+    }
     if ($p.Length -lt 8) { return 'LAB_PASSWORD is shorter than 8 characters' }
-    if ($p -match '[''"\\`$\s]') { return 'LAB_PASSWORD contains a character that the lab does not accept ('' " \ ` $ or white space)' }
-    if ($p -match 'administrator|sqlsvc') { return 'LAB_PASSWORD contains an account name (Administrator or sqlsvc)' }
-    $n = 0; foreach ($rx in '[A-Z]', '[a-z]', '[0-9]', '[^A-Za-z0-9]') { if ($p -cmatch $rx) { $n++ } }
+    if ($p -match '[''"\\`$\s]') {
+        return 'LAB_PASSWORD contains a character that the lab does not accept ('' " \ ` $ or white space)'
+    }
+    if ($p -match 'administrator|sqlsvc') {
+        return 'LAB_PASSWORD contains an account name (Administrator or sqlsvc)'
+    }
+    $n = 0
+    foreach ($rx in '[A-Z]', '[a-z]', '[0-9]', '[^A-Za-z0-9]') { if ($p -cmatch $rx) { $n++ } }
     if ($n -lt 3) { return "LAB_PASSWORD has only $n of the 4 character classes (needs 3)" }
     $null
 }
-function Get-LabPassword {  # checked value; stops with help when it is not valid
+function Get-LabPassword {
+    # checked value; stops with help when it is not valid
     $p = Get-LabEnvValue 'LAB_PASSWORD'
     $m = Get-LabPasswordProblem $p
     if ($m) { Stop-Lab "$m`n  $script:PasswordHelp" }

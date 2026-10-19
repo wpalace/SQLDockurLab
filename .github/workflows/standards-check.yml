@@ -1,0 +1,118 @@
+# Formatter and linter checks for every language in the repository (docs/CI.md).
+# The frozen runtime image inputs (runtime/launcher.sh, runtime/router.sh,
+# runtime/qmp.py; see AGENTS.md) are excluded from shfmt (ruff excludes qmp.py in runtime/ruff.toml);
+# extensionless bash scripts (lab, deploy/gcp/lab-gcp) are included.
+# tests/standards-check.sh runs the same checks locally (containers when a tool is missing).
+name: Standards check
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: standards-check-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  python:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v7.0.1
+        with:
+          persist-credentials: false
+      - name: ruff format --check
+        uses: astral-sh/ruff-action@v4.1.0
+        with:
+          version: "0.17.1"
+          args: format --check --diff
+      - name: ruff check
+        uses: astral-sh/ruff-action@v4.1.0
+        with:
+          version: "0.17.1"
+          args: check --output-format=github
+
+  bash:
+    runs-on: ubuntu-24.04
+    env:
+      SHFMT_VERSION: v3.14.1
+      SHELLCHECK_VERSION: 0.11.0.1
+    steps:
+      - uses: actions/checkout@v7.0.1
+        with:
+          persist-credentials: false
+      - name: Install shfmt
+        run: |
+          curl -fsSL -o "${RUNNER_TEMP}/shfmt" \
+            "https://github.com/mvdan/sh/releases/download/${SHFMT_VERSION}/shfmt_${SHFMT_VERSION}_linux_amd64"
+          chmod +x "${RUNNER_TEMP}/shfmt"
+          echo "${RUNNER_TEMP}" >> "${GITHUB_PATH}"
+      - name: shfmt -d
+        run: |
+          git ls-files -z -- '*.sh' '*.bash' lab deploy/gcp/lab-gcp \
+            ':!:runtime/launcher.sh' ':!:runtime/router.sh' \
+            | xargs -0 -r shfmt -d -i 2 -ci -bn
+      - name: shellcheck
+        run: |
+          git ls-files -z -- '*.sh' '*.bash' lab deploy/gcp/lab-gcp \
+            | xargs -0 -r pipx run --spec "shellcheck-py==${SHELLCHECK_VERSION}" shellcheck -x
+
+  powershell:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v7.0.1
+        with:
+          persist-credentials: false
+      - name: Invoke-Formatter and Invoke-ScriptAnalyzer
+        shell: pwsh
+        run: |
+          Install-PSResource -Name PSScriptAnalyzer -Version 1.25.0 -Scope CurrentUser -TrustRepository
+          # Checks every file with Invoke-Formatter and Invoke-ScriptAnalyzer and retries only the
+          # PSScriptAnalyzer 1.25 UseCorrectCasing crash (see the script).
+          ./tests/Test-PowerShellFile.ps1
+
+  terraform:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v7.0.1
+        with:
+          persist-credentials: false
+      - uses: hashicorp/setup-terraform@v4.0.1
+        with:
+          terraform_version: "~1.16.0"
+          terraform_wrapper: false
+      - uses: terraform-linters/setup-tflint@v6.3.2
+        with:
+          tflint_version: v0.64.0
+      - name: terraform fmt -check -recursive
+        run: terraform fmt -check -recursive -diff
+      - name: tflint
+        env:
+          GITHUB_TOKEN: ${{ github.token }} # avoids rate limits when downloading plugins
+        run: |
+          tflint --init --config "${PWD}/.tflint.hcl"
+          tflint --recursive --config "${PWD}/.tflint.hcl" --format compact --minimum-failure-severity=notice
+
+  docker:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v7.0.1
+        with:
+          persist-credentials: false
+      - name: hadolint
+        uses: hadolint/hadolint-action@v3.5.0
+        with:
+          recursive: true
+          dockerfile: "Dockerfile*"
+          config: .hadolint.yaml
+      - name: yamllint
+        run: pipx run yamllint==1.38.0 -c .yamllint.yaml --format github .
+      - name: docker compose config
+        run: |
+          # lab.env is the committed env file (LAB_PASSWORD is a placeholder there).
+          docker compose -f compose.yml -f compose.vhost.yml --env-file lab.env config --quiet
+          docker compose -f build/base/compose.yml --env-file lab.env config --quiet
