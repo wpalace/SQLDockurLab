@@ -164,6 +164,13 @@ Read this file completely before you start. Do the procedures in sequence.
 | Planned failover, no data loss | `./lab failover SQL3` |
 | Change replica modes | `./lab failover-modes "SQL3:SYNCHRONOUS_COMMIT:MANUAL ..."` (`config` = `lab.env`) |
 | Power off one VM (test) | `./lab kill SQL1` |
+| Show version and contract | `./lab version --json` |
+| Show status for scripts | `./lab status --json` |
+| Write the inventory | `./lab inventory --format ansible` (or `json`) |
+| Download a payload once | `./lab media fetch URL --sha256 HEX` |
+| Put payloads in the VMs' CD drives | `./lab media iso NAME.iso FILE...`, then `./lab media attach NAME.iso sql` |
+
+> **NOTE:** Other repositories use the lab through these commands. Refer to `docs/CONSUMERS.md`.
 
 > **CAUTION:** Do not run `ALTER AVAILABILITY GROUP ... FAILOVER` on an asynchronous replica. Use `./lab failover SQLn`. The command does these steps: (1) it sets the primary and the target to `SYNCHRONOUS_COMMIT`, (2) it waits until the target is `SYNCHRONIZED`, (3) it runs `FAILOVER` on the target (no data loss), (4) it sets the original modes again. `FORCE_FAILOVER_ALLOW_DATA_LOSS` is necessary only if the primary is lost; do not use it for planned failovers.
 

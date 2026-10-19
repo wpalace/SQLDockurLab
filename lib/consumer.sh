@@ -3,8 +3,10 @@
 # media. Sourced by ./lab, not executed. Output on stdout is machine-readable; messages go to stderr.
 # Exit codes: 0 success, 1 failure, 2 usage error.
 
-# Contract version of this interface. Minor: backward-compatible additions. Major: breaking change.
-readonly LAB_CONTRACT_VERSION="1.0"
+# Contract version of this interface (file CONTRACT, shared with lab.ps1). Minor: backward-compatible
+# additions. Major: a breaking change. docs/CONSUMERS.md describes the rules.
+LAB_CONTRACT_VERSION=$(tr -d '[:space:]' <"$LAB_ROOT/CONTRACT")
+readonly LAB_CONTRACT_VERSION
 readonly LAB_TOOLS_IMAGE="sql-ag-lab/tools:latest"
 
 usage_error() {

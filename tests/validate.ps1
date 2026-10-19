@@ -21,7 +21,8 @@ $ErrorActionPreference = 'Stop'
 $repo = (Resolve-Path -Path (Join-Path -Path $PSScriptRoot -ChildPath '..')).Path
 Set-Location -Path $repo
 $rc = 0
-$files = @('lab.ps1', 'lib/LabHost.psm1', 'deploy/gcp/lab-gcp.ps1', 'tests/validate.ps1', 'tests/LabGcp.Tests.ps1')
+$files = @('lab.ps1', 'lib/LabHost.psm1', 'lib/LabConsumer.psm1', 'deploy/gcp/lab-gcp.ps1', 'tests/validate.ps1',
+    'tests/LabGcp.Tests.ps1', 'tests/LabConsumer.Tests.ps1')
 
 Write-Host '== pwsh parse (operator scripts)'
 foreach ($f in $files) {
@@ -115,7 +116,8 @@ if ($compatFindings.Count) {
 Write-Host '== Pester'
 Import-Module -Name Pester -MinimumVersion 5.5.0
 $cfg = New-PesterConfiguration
-$cfg.Run.Path = Join-Path -Path $repo -ChildPath 'tests/LabGcp.Tests.ps1'
+$cfg.Run.Path = @((Join-Path -Path $repo -ChildPath 'tests/LabGcp.Tests.ps1'),
+    (Join-Path -Path $repo -ChildPath 'tests/LabConsumer.Tests.ps1'))
 $cfg.Run.PassThru = $true
 $cfg.Output.Verbosity = 'Normal'
 $result = Invoke-Pester -Configuration $cfg

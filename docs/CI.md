@@ -95,6 +95,7 @@ tflint fails at `notice` severity, so naming and documentation findings fail the
 | --- | --- | --- |
 | hadolint | hadolint 2.x | Dockerfile best practices (pinned bases, clean apt layers), failure threshold `warning` |
 | yamllint | yamllint 1.38.0 | YAML style for compose files and workflows (2-space indent, lines up to 120 characters) |
+| hadolint scope | | Every `Dockerfile*`, including `tools/Dockerfile` (the tools image; not frozen) |
 | `docker compose config --quiet` | Docker Compose | `compose.yml` + `compose.vhost.yml` and `build/base/compose.yml` are valid with the committed `lab.env` |
 
 Settings: `.hadolint.yaml` and `.yamllint.yaml`.
@@ -139,7 +140,9 @@ After the formatter and linter checks, `tests/validate.sh` also runs:
     PowerShell front end without a cloud account: VM name mapping, remote command encoding,
     command-line parsing (apply flags, console and tunnel options), the spawned-VM registry and
     destroy guard, the watch-terminal script, LF line endings, the lab password rules and the
-    `key` command.
+    `key` command. `tests/LabConsumer.Tests.ps1` tests the consumer interface: the contract
+    version, the inventory (no password in it), and that `lab.ps1` and `./lab` write the same
+    `version --json` and `inventory` output (when bash is available).
 - **`docker compose config`** for both compose projects.
 - **`terraform init -backend=false` and `terraform validate`** for both root modules (no
   credentials and no state are used). `./lab gcp tf-check` (or `./lab.ps1 gcp tf-check`) runs

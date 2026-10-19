@@ -209,9 +209,13 @@ compose.yml             runtime: router + 5 VMs   compose.vhost.yml  auto-added 
 runtime/                Dockerfile, launcher.sh (QEMU + checkpoint/respawn), qmp.py, router.sh
 build/base/             stage-1 dockur compose + OEM payload (Prepare/Finalize-Base, FirstBoot, unattend)
 guest/                  provisioning scripts pushed over SSH (DC, join, SQL, WSFC, HADR, AG, listener, tests)
-lib/                    common.sh (ssh/qmp/helpers), provision.sh (stage-2 orchestration)
+lib/                    common.sh (ssh/qmp/helpers), provision.sh (stage-2 orchestration), consumer.sh +
+                        LabConsumer.psm1 (consumer interface: version, status --json, inventory, media)
+tools/                  Dockerfile of the small tools image (xorriso, for `lab media iso`)
+media/cache/            shared payload cache for consumers (gitignored)
+VERSION, CONTRACT       lab release (semver) and consumer interface version
 tests/                  validate.sh (static), e2e-fakeguest.sh + fakeguest/ (runtime pipeline e2e)
-docs/                   CI.md (CI pipeline and code checks), style/ (style guide per language)
+docs/                   CI.md (CI pipeline and code checks), CONSUMERS.md (consumer interface), style/ (style guide per language)
 ci/                     GitHub Actions self-hosted runner example
 ```
 
@@ -222,6 +226,15 @@ Every pull request runs the formatter and linter checks in `.github/workflows/st
 config). Run the same checks locally with `tests/standards-check.sh` (`--fix` to format), and the
 full static validation with `tests/validate.sh`. Details: [docs/CI.md](docs/CI.md). Style guides:
 [docs/style/](docs/style/).
+
+## Use the lab from other repositories
+
+Other repositories (for example an Ansible repo that tests SQL Server patching) depend on this lab
+through a small versioned interface, not by copying it: `lab version --json` (version and contract),
+`lab status --json`, `lab reset` (checkpoints as test fixtures, exit codes),
+`lab inventory --format json|ansible` (no secrets), `lab password` (for scripts) and `lab media`
+(a shared download cache, delivered to the VMs as an ISO in their CD drive). Consumers find the lab
+through `LAB_HOME` and pin a lab tag or commit. Details: [docs/CONSUMERS.md](docs/CONSUMERS.md).
 
 ## Deployment targets
 
