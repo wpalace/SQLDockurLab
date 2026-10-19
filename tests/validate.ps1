@@ -1,7 +1,8 @@
 #Requires -Version 7.4
 <#
 .SYNOPSIS
-    Static checks for the PowerShell operator front end: parse, PSScriptAnalyzer, Pester.
+    Static checks for the PowerShell operator front end: parse, PSScriptAnalyzer, Pester; and the
+    Windows PowerShell 5.1 syntax of the guest scripts.
 .DESCRIPTION
     PSScriptAnalyzer uses the house settings (PSScriptAnalyzerSettings.psd1). Installs PSScriptAnalyzer
     1.25+ and Pester 5.5+ for the current user when missing. tests/standards-check.sh runs the same
@@ -47,12 +48,28 @@ foreach ($m in $modules) {
     }
 }
 
+# PSScriptAnalyzer 1.25 on pwsh 7.6 sometimes crashes in UseCorrectCasing (NullReferenceException in
+# CommandInfo.Parameters). Retry only that crash, at most 3 runs per file.
+function Invoke-AnalyzerWithRetry([string]$Path, [object]$Settings) {
+    foreach ($attempt in 1..3) {
+        try {
+            return Invoke-ScriptAnalyzer -Path $Path -Settings $Settings
+        } catch [System.NullReferenceException] {
+            Write-Host "   PSScriptAnalyzer crashed on $Path (known 1.25 race); retry $attempt"
+        } catch {
+            if ($_.Exception.Message -notmatch 'Object reference not set') { throw }
+            Write-Host "   PSScriptAnalyzer crashed on $Path (known 1.25 race); retry $attempt"
+        }
+    }
+    throw "PSScriptAnalyzer crashed 3 times on $Path"
+}
+
 Write-Host '== PSScriptAnalyzer (PSScriptAnalyzerSettings.psd1)'
 Import-Module -Name PSScriptAnalyzer -MinimumVersion 1.25.0
 $settings = Join-Path -Path $repo -ChildPath 'PSScriptAnalyzerSettings.psd1'
 $findings = @(
     foreach ($f in $files) {
-        Invoke-ScriptAnalyzer -Path (Join-Path -Path $repo -ChildPath $f) -Settings $settings
+        Invoke-AnalyzerWithRetry -Path (Join-Path -Path $repo -ChildPath $f) -Settings $settings
     }
 )
 if ($findings.Count) {
@@ -61,6 +78,24 @@ if ($findings.Count) {
     $rc = 1
 } else {
     Write-Host '   no findings'
+}
+
+Write-Host '== Windows PowerShell 5.1 syntax (guest and base image scripts run in 5.1)'
+$compat = @{
+    IncludeRules = @('PSUseCompatibleSyntax')
+    Rules        = @{ PSUseCompatibleSyntax = @{ Enable = $true; TargetVersions = @('5.1') } }
+}
+$guestScripts = @(Get-ChildItem -Path (Join-Path -Path $repo -ChildPath 'guest'),
+    (Join-Path -Path $repo -ChildPath 'build/base/oem/lab') -Filter '*.ps1')
+$compatFindings = @(
+    foreach ($g in $guestScripts) { Invoke-AnalyzerWithRetry -Path $g.FullName -Settings $compat }
+)
+if ($compatFindings.Count) {
+    $compatFindings | Format-Table -AutoSize -Property ScriptName, Line, Message |
+        Out-String -Width 200 | Write-Host
+    $rc = 1
+} else {
+    Write-Host "   $($guestScripts.Count) scripts, no findings"
 }
 
 Write-Host '== Pester'
