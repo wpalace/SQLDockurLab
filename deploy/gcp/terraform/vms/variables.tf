@@ -15,19 +15,16 @@ variable "name_prefix" {
   default     = "sqlag"
 }
 
-variable "network_name" {
-  type    = string
-  default = "sqlag-net"
-}
-
 variable "subnet_name" {
-  type    = string
-  default = "sqlag-subnet"
+  description = "Subnet of the shared root (output subnet_name) that the lab VMs attach to."
+  type        = string
+  default     = "sqlag-subnet"
 }
 
 variable "network_tag" {
-  type    = string
-  default = "sqlag-lab"
+  description = "Network tag of the shared root (output network_tag): the IAP SSH firewall rule targets it."
+  type        = string
+  default     = "sqlag-lab"
 }
 
 variable "bucket_name" {

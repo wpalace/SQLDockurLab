@@ -9,23 +9,56 @@ SSH_KEY="$SECRETS_DIR/id_ed25519"
 VMS=(DC1 SQL1 SQL2 SQL3 SQL4)
 SQL_VMS=(SQL1 SQL2 SQL3 SQL4)
 
-_c_red=$'\e[31m'; _c_grn=$'\e[32m'; _c_yel=$'\e[33m'; _c_cyn=$'\e[36m'; _c_off=$'\e[0m'
-[[ -t 1 ]] || { _c_red=; _c_grn=; _c_yel=; _c_cyn=; _c_off=; }
+_c_red=$'\e[31m'
+_c_grn=$'\e[32m'
+_c_yel=$'\e[33m'
+_c_cyn=$'\e[36m'
+_c_off=$'\e[0m'
+[[ -t 1 ]] || {
+  _c_red=
+  _c_grn=
+  _c_yel=
+  _c_cyn=
+  _c_off=
+}
 # Progress log: when logs/progress.log exists, every log/ok/warn/error line is also appended to it
 # with a timestamp, so the user can follow it with `./lab watch` (tail -F).
 PROGRESS_LOG=${LAB_PROGRESS_LOG:-$LAB_ROOT/logs/progress.log}
-plog() { [[ -f $PROGRESS_LOG ]] || return 0; printf '%s %s\n' "$(date '+%Y-%m-%d %H:%M:%S %Z')" "$*" >> "$PROGRESS_LOG" 2>/dev/null || true; }
-log()  { printf '%s[lab %s]%s %s\n' "$_c_cyn" "$(date +%H:%M:%S)" "$_c_off" "$*"; plog "$*"; }
-ok()   { printf '%s  ok%s  %s\n' "$_c_grn" "$_c_off" "$*"; plog "  ok   $*"; }
-warn() { printf '%s  warn%s %s\n' "$_c_yel" "$_c_off" "$*" >&2; plog "  WARN $*"; }
-die()  { printf '%s  error%s %s\n' "$_c_red" "$_c_off" "$*" >&2; plog "  ERROR $*"; exit 1; }
+plog() {
+  [[ -f $PROGRESS_LOG ]] || return 0
+  printf '%s %s\n' "$(date '+%Y-%m-%d %H:%M:%S %Z')" "$*" >>"$PROGRESS_LOG" 2>/dev/null || true
+}
+log() {
+  printf '%s[lab %s]%s %s\n' "$_c_cyn" "$(date +%H:%M:%S)" "$_c_off" "$*"
+  plog "$*"
+}
+ok() {
+  printf '%s  ok%s  %s\n' "$_c_grn" "$_c_off" "$*"
+  plog "  ok   $*"
+}
+warn() {
+  printf '%s  warn%s %s\n' "$_c_yel" "$_c_off" "$*" >&2
+  plog "  WARN $*"
+}
+die() {
+  printf '%s  error%s %s\n' "$_c_red" "$_c_off" "$*" >&2
+  plog "  ERROR $*"
+  exit 1
+}
 now_ms() { date +%s%3N; }
-elapsed() { local t0=$1; local ms=$(( $(now_ms) - t0 )); printf '%d.%01ds' $((ms / 1000)) $(((ms % 1000) / 100)); }
+elapsed() {
+  local t0=$1
+  local ms=$(($(now_ms) - t0))
+  printf '%d.%01ds' $((ms / 1000)) $(((ms % 1000) / 100))
+}
 
 # shellcheck source=lib/password.sh
 source "$LAB_ROOT/lib/password.sh"
-check_password() { local m; m=$(password_problem "${LAB_PASSWORD:-}") || die "$m
-  $LAB_PASSWORD_HELP"; }
+check_password() {
+  local m
+  m=$(password_problem "${LAB_PASSWORD:-}") || die "$m
+  $LAB_PASSWORD_HELP"
+}
 
 load_env() {
   local envfile=${LAB_ENV_FILE:-$LAB_ROOT/lab.env}
@@ -42,7 +75,8 @@ load_env() {
   for v in LAB_IMAGES_DIR LAB_MEDIA_DIR; do
     local p=${!v}
     [[ "$p" == /* ]] || p="$LAB_ROOT/${p#./}"
-    printf -v "$v" '%s' "$p"; export "${v?}"
+    printf -v "$v" '%s' "$p"
+    export "${v?}"
   done
   export LAB_ENV_FILE
   mkdir -p "$STATE_DIR/logs"
@@ -60,7 +94,10 @@ compose() {
 
 vm_lc() { printf '%s' "${1,,}"; }
 vm_container() { printf 'lab-%s' "$(vm_lc "$1")"; }
-vm_ip() { local v="${1^^}_IP"; printf '%s' "${!v}"; }
+vm_ip() {
+  local v="${1^^}_IP"
+  printf '%s' "${!v}"
+}
 
 # Run a tool inside the runtime image with the images dir mounted at /images
 # (qemu-img, mv, chmod on root-owned files, without needing host qemu-utils or sudo).
@@ -72,21 +109,29 @@ qmp() { # <VM> <args...>
 
 # Run "$@" for each VM in parallel: fn VM. Logs to state/logs/<action>-<vm>.log, prefixes output.
 parallel_vms() { # <action-name> <fn> <vm...>
-  local action=$1 fn=$2; shift 2
-  local -A pids=(); local vm rc=0
+  local action=$1 fn=$2
+  shift 2
+  local -A pids=()
+  local vm rc=0
   for vm in "$@"; do
-    ( set -o pipefail; "$fn" "$vm" 2>&1 | tee "$STATE_DIR/logs/$action-$vm.log" | sed -u "s/^/[$vm] /" ) &
+    (
+      set -o pipefail
+      "$fn" "$vm" 2>&1 | tee "$STATE_DIR/logs/$action-$vm.log" | sed -u "s/^/[$vm] /"
+    ) &
     pids[$vm]=$!
   done
   for vm in "$@"; do
-    if ! wait "${pids[$vm]}"; then warn "$action failed on $vm (see state/logs/$action-$vm.log)"; rc=1; fi
+    if ! wait "${pids[$vm]}"; then
+      warn "$action failed on $vm (see state/logs/$action-$vm.log)"
+      rc=1
+    fi
   done
   return $rc
 }
 
 # ------------------------------------------------------------------------- ssh --
 SSH_OPTS=(-i "$SSH_KEY" -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o LogLevel=ERROR
-          -o BatchMode=yes -o ConnectTimeout=5 -o ConnectionAttempts=6 -o ServerAliveInterval=15 -o ServerAliveCountMax=4)
+  -o BatchMode=yes -o ConnectTimeout=5 -o ConnectionAttempts=6 -o ServerAliveInterval=15 -o ServerAliveCountMax=4)
 # shellcheck disable=SC2029  # remote command is built locally on purpose
 gssh() { # <VM> <remote powershell command string>
   ssh "${SSH_OPTS[@]}" "Administrator@$(vm_ip "$1")" "$2"
@@ -99,7 +144,8 @@ gps() { # <VM> <powershell code>
 }
 # Run a guest script from C:\Lab\guest; propagates its exit code.
 grun() { # <VM> <Script.ps1> [args...]
-  local vm=$1 script=$2; shift 2
+  local vm=$1 script=$2
+  shift 2
   local a args=""
   for a in "$@"; do args+=" '${a//\'/\'\'}'"; done
   gssh "$vm" "powershell.exe -NoProfile -NonInteractive -ExecutionPolicy Bypass -File C:\\Lab\\guest\\$script$args; exit \$LASTEXITCODE"
@@ -112,7 +158,10 @@ ssh_ready() { gssh "$1" 'exit 0' >/dev/null 2>&1; }
 wait_ssh() { # <VM> [timeout_s]
   local vm=$1 t=${2:-1800} t0=$SECONDS
   until ssh_ready "$vm"; do
-    (( SECONDS - t0 > t )) && { warn "$vm: SSH not reachable after ${t}s"; return 1; }
+    ((SECONDS - t0 > t)) && {
+      warn "$vm: SSH not reachable after ${t}s"
+      return 1
+    }
     sleep 5
   done
 }
@@ -126,7 +175,10 @@ reboot_wait() { # <VM>
   while :; do
     after=$(boot_id "$vm" || true)
     [[ -n "$after" && "$after" != "$before" ]] && break
-    (( SECONDS - t0 > 1800 )) && { warn "$vm did not come back after reboot"; return 1; }
+    ((SECONDS - t0 > 1800)) && {
+      warn "$vm did not come back after reboot"
+      return 1
+    }
     sleep 5
   done
   ok "$vm back after $((SECONDS - t0))s"
@@ -141,8 +193,11 @@ gstep() { # <VM> <Script.ps1> [args...]
   grun "$@" || rc=$?
   case $rc in
     0) return 0 ;;
-    3010|194) reboot_wait "$vm" ;;
-    *) warn "$vm: ${2} exited $rc"; return "$rc" ;;
+    3010 | 194) reboot_wait "$vm" ;;
+    *)
+      warn "$vm: ${2} exited $rc"
+      return "$rc"
+      ;;
   esac
 }
 
@@ -159,8 +214,9 @@ write_guest_config() {
     IFS=: read -r name mode fo <<<"$entry"
     reps+="${reps:+,}{\"name\":\"$name\",\"availabilityMode\":\"$mode\",\"failoverMode\":\"$fo\"}"
   done
-  local pw=${LAB_PASSWORD//\\/\\\\}; pw=${pw//\"/\\\"}
-  cat > "$f" <<JSON
+  local pw=${LAB_PASSWORD//\\/\\\\}
+  pw=${pw//\"/\\\"}
+  cat >"$f" <<JSON
 {
   "domain": "$LAB_DOMAIN", "netbios": "$LAB_NETBIOS", "password": "$pw",
   "sqlServiceUser": "$LAB_SQL_SVC_USER", "sqlPid": "22222-00000-00000-00000-00000",
@@ -180,7 +236,14 @@ JSON
 prefix_to_mask() {
   local p=$1 m="" o
   for _ in 1 2 3 4; do
-    if (( p >= 8 )); then o=255; p=$((p - 8)); else o=$(( 256 - 2 ** (8 - p) )); (( o == 256 )) && o=0; p=0; fi
+    if ((p >= 8)); then
+      o=255
+      p=$((p - 8))
+    else
+      o=$((256 - 2 ** (8 - p)))
+      ((o == 256)) && o=0
+      p=0
+    fi
     m+="${m:+.}$o"
   done
   printf '%s' "$m"

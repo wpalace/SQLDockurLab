@@ -11,15 +11,19 @@ prov_wait_all_ssh() {
   done
 }
 
-prov_push_all() { local vm; for vm in "${VMS[@]}"; do gpush "$vm" || die "upload to $vm failed"; done; ok "guest scripts uploaded"; }
+prov_push_all() {
+  local vm
+  for vm in "${VMS[@]}"; do gpush "$vm" || die "upload to $vm failed"; done
+  ok "guest scripts uploaded"
+}
 
-_join()   { gstep "$1" Join-Domain.ps1; }
-_sql()    { gstep "$1" RunAs.ps1 Install-Sql.ps1; }
-_hadr()   { gstep "$1" Enable-Hadr.ps1; }
+_join() { gstep "$1" Join-Domain.ps1; }
+_sql() { gstep "$1" RunAs.ps1 Install-Sql.ps1; }
+_hadr() { gstep "$1" Enable-Hadr.ps1; }
 _agjoin() { gstep "$1" Join-LabAg.ps1; }
 _settle() { gstep "$1" Optimize-ForSnapshot.ps1 "$2"; }
 _settle_short() { _settle "$1" 30; }
-_settle_long()  { _settle "$1" "$LAB_SETTLE_SECONDS"; }
+_settle_long() { _settle "$1" "$LAB_SETTLE_SECONDS"; }
 
 prov_stage_domain_sql() {
   log "== stage 1/3: domain + standalone SQL Server instances"
@@ -67,13 +71,14 @@ prov_checkpoint() { # <name> <settle-fn>
 cmd_provision() {
   local t0=$SECONDS from=${1:-}
   [[ -f "$LAB_IMAGES_DIR/base/disk.qcow2" ]] || die "no base image; run ./lab build-base first"
-  cmd_log; watch_local   # live terminal (lib/watch.sh); LAB_WATCH=0 to opt out
+  cmd_log
+  watch_local # live terminal (lib/watch.sh); LAB_WATCH=0 to opt out
   write_guest_config
   ensure_net
   if [[ -z "$from" ]]; then
     [[ -f "$LAB_MEDIA_DIR/$LAB_SQL_ISO" ]] || die "SQL ISO missing: $LAB_MEDIA_DIR/$LAB_SQL_ISO"
     log "booting all VMs from the base image (LAB_MODE=boot)"
-    rm -f "$STATE_DIR/active_checkpoint"   # fresh boot: new checkpoints descend from base
+    rm -f "$STATE_DIR/active_checkpoint" # fresh boot: new checkpoints descend from base
     LAB_MODE=boot compose up -d --force-recreate
     prov_wait_all_ssh
     prov_push_all
@@ -102,5 +107,5 @@ cmd_provision() {
     prov_stage_ag
     prov_checkpoint golden _settle_long
   fi
-  ok "provisioning finished in $(( (SECONDS - t0) / 60 )) min. Try: ./lab up && ./lab health --deep"
+  ok "provisioning finished in $(((SECONDS - t0) / 60)) min. Try: ./lab up && ./lab health --deep"
 }

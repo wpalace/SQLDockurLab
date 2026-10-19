@@ -1,0 +1,63 @@
+# Optional local hooks; the same checks as CI (docs/CI.md). Frozen runtime image inputs are
+# excluded from shfmt (AGENTS.md). Hook versions match .github/workflows/standards-check.yml.
+# Install: pre-commit install
+
+repos:
+  - repo: https://github.com/pre-commit/pre-commit-hooks
+    rev: v6.0.0
+    hooks:
+      - id: end-of-file-fixer
+      - id: trailing-whitespace
+      - id: check-merge-conflict
+      - id: check-yaml
+        args: [--allow-multiple-documents]
+
+  # Python
+  - repo: https://github.com/astral-sh/ruff-pre-commit
+    rev: v0.17.1
+    hooks:
+      - id: ruff-check
+      - id: ruff-format
+
+  # Bash
+  - repo: https://github.com/scop/pre-commit-shfmt
+    rev: v3.14.1-1
+    hooks:
+      - id: shfmt
+        args: [--write, -i, "2", -ci, -bn]
+        exclude: ^runtime/(launcher|router)\.sh$
+  - repo: https://github.com/shellcheck-py/shellcheck-py
+    rev: v0.11.0.1
+    hooks:
+      - id: shellcheck
+        args: [-x]
+
+  # Terraform (needs terraform and tflint on PATH)
+  - repo: https://github.com/antonbabenko/pre-commit-terraform
+    rev: v1.109.2
+    hooks:
+      - id: terraform_fmt
+      - id: terraform_tflint
+        args:
+          - --args=--config=__GIT_WORKING_DIR__/.tflint.hcl
+          - --args=--minimum-failure-severity=notice
+
+  # Docker and Compose
+  - repo: https://github.com/hadolint/hadolint
+    rev: v2.15.1
+    hooks:
+      - id: hadolint-docker
+  - repo: https://github.com/adrienverge/yamllint
+    rev: v1.38.0
+    hooks:
+      - id: yamllint
+        args: [-c, .yamllint.yaml]
+
+  # PowerShell (needs pwsh 7.4+ with PSScriptAnalyzer 1.25 on PATH)
+  - repo: local
+    hooks:
+      - id: psscriptanalyzer
+        name: PSScriptAnalyzer
+        language: system
+        files: \.(ps1|psm1|psd1)$
+        entry: pwsh -NoProfile -File tests/Test-PowerShellFile.ps1

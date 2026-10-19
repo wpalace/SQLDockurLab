@@ -1,0 +1,23 @@
+# ruff settings (docs/style/python.md): ruff format + ruff check, line length 100, Python 3.14 baseline.
+line-length = 100
+target-version = "py314"
+
+[format]
+quote-style = "double"
+indent-style = "space"
+skip-magic-trailing-comma = false # trailing comma keeps one item per line
+docstring-code-format = true
+
+[lint]
+select = [
+  "E",   # pycodestyle errors
+  "F",   # pyflakes
+  "I",   # isort: stdlib, third-party, local
+  "B",   # bugbear: mutable defaults (B006), finally control flow (B012)
+  "UP",  # pyupgrade: modern syntax for the target version
+  "SIM", # simplify
+  "N",   # pep8-naming
+]
+
+[lint.isort]
+combine-as-imports = true

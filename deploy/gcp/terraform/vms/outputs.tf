@@ -1,6 +1,15 @@
-output "project_id" { value = var.project_id }
-output "zone" { value = var.zone }
-output "bucket_name" { value = var.bucket_name }
+output "project_id" {
+  description = "GCP project of the lab VMs."
+  value       = var.project_id
+}
+output "zone" {
+  description = "Zone of the lab VMs."
+  value       = var.zone
+}
+output "bucket_name" {
+  description = "Shared artifact bucket."
+  value       = var.bucket_name
+}
 
 output "vms" {
   description = "Lab VMs and their expected settings (./lab gcp check compares the live VM to these)."
@@ -16,5 +25,6 @@ output "vms" {
 
 # One line per VM for shell scripts: key name machine_type min_cpu_platform(with _ for spaces)
 output "vm_lines" {
-  value = join("\n", [for k, v in local.vms : "${k} ${v.name} ${v.machine_type} ${replace(v.min_cpu_platform, " ", "_")}"])
+  description = "One line per VM for the front ends: key name machine_type min_cpu_platform (spaces as _)."
+  value       = join("\n", [for k, v in local.vms : "${k} ${v.name} ${v.machine_type} ${replace(v.min_cpu_platform, " ", "_")}"])
 }
