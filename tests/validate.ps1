@@ -4,7 +4,7 @@
     Static checks for the PowerShell operator front end: parse, PSScriptAnalyzer, Pester; and the
     Windows PowerShell 5.1 syntax of the guest scripts.
 .DESCRIPTION
-    PSScriptAnalyzer uses the house settings (PSScriptAnalyzerSettings.psd1). Installs PSScriptAnalyzer
+    PSScriptAnalyzer uses the project settings (PSScriptAnalyzerSettings.psd1). Installs PSScriptAnalyzer
     1.25+ and Pester 5.5+ for the current user when missing. tests/standards-check.sh runs the same
     analyzer settings, plus Invoke-Formatter, over every PowerShell file in the repository.
 .EXAMPLE
@@ -49,7 +49,8 @@ foreach ($m in $modules) {
 }
 
 # PSScriptAnalyzer 1.25 on pwsh 7.6 sometimes crashes in UseCorrectCasing (NullReferenceException in
-# CommandInfo.Parameters). Retry only that crash, at most 10 runs per file
+# CommandInfo.Parameters); after such a crash its command lookup can fail with "The term
+# 'Get-Command' is not recognized". Retry only these errors, at most 10 runs per file
 # (measured: up to 4 runs were needed for one file).
 function Invoke-AnalyzerWithRetry([string]$Path, [object]$Settings) {
     foreach ($attempt in 1..10) {
@@ -58,7 +59,9 @@ function Invoke-AnalyzerWithRetry([string]$Path, [object]$Settings) {
         } catch [System.NullReferenceException] {
             Write-Host "   PSScriptAnalyzer crashed on $Path (known 1.25 race); retry $attempt"
         } catch {
-            if ($_.Exception.Message -notmatch 'Object reference not set') { throw }
+            if ($_.Exception.Message -notmatch "Object reference not set|The term 'Get-Command' is not") {
+                throw
+            }
             Write-Host "   PSScriptAnalyzer crashed on $Path (known 1.25 race); retry $attempt"
         }
     }

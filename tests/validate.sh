@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Static validation (TC1): house coding standards checks, PowerShell parse, Pester, compose config,
+# Static validation (TC1): formatter and linter checks, PowerShell parse, Pester, compose config,
 # terraform validate, password rules, XML, python.
 set -uo pipefail # no -e on purpose: every check runs and all failures are reported
 cd "$(dirname "$0")/.." || exit 1
@@ -16,9 +16,9 @@ tool() { # tool NAME IMAGE ENTRYPOINT ARGS...
 }
 pwsh() { tool pwsh mcr.microsoft.com/dotnet/sdk:10.0 pwsh "$@"; }
 terraform() { tool terraform docker.io/hashicorp/terraform:1.13 terraform "$@"; }
-step "house coding standards (tests/standards-check.sh: every Formatting-section check)"
+step "formatters and linters (tests/standards-check.sh)"
 tests/standards-check.sh || rc=1
-step "PowerShell (tests/validate.ps1: parse, house PSScriptAnalyzer settings, 5.1 syntax, Pester)"
+step "PowerShell (tests/validate.ps1: parse, PSScriptAnalyzer settings, 5.1 syntax, Pester)"
 pwsh -NoProfile -File tests/validate.ps1 || rc=1
 step "compose config"
 "$DOCKER" compose -f compose.yml -f compose.vhost.yml --env-file lab.env config -q || rc=1

@@ -1,11 +1,6 @@
----
-name: python
-description: "House coding standard for Python 3.14+. Use when writing, editing, or reviewing Python code (*.py, *.pyi, pyproject.toml, uv.lock, ruff.toml)."
----
+# Python style guide
 
-# Python Standards
-
-> **Before calling work done:** run the formatter and linter checks in the Formatting section (`ruff format --check . && ruff check .`) and fix every finding. Reference config: `ruff.toml` beside this file, which `sync-standards.sh` installs at the project root.
+> **Before calling work done:** run the formatter and linter checks in the Formatting section (`ruff format --check . && ruff check .`) and fix every finding. Configuration: `ruff.toml` (and `runtime/ruff.toml`) at the repository root. `tests/standards-check.sh` runs every check; see [CI.md](../CI.md).
 
 **Targets:** Python 3.14 as the baseline for new projects. Python 3.15 (released Oct 9, 2026) is allowed once your dependencies support it. Tooling: uv 0.13+, Ruff 0.17+.
 
@@ -122,6 +117,12 @@ def add_tag(tag: str, tags: list[str] | None = None) -> list[str]:
 - **Bare `except:`.** Catch specific types. At the top level, catch `Exception`, log it, and re-raise.
 - **Wildcard imports** (`from module import *`).
 - f-strings for SQL or shell commands, global mutable state, `assert` for validation, and unexplained `type: ignore`.
+
+## In this project
+
+- The only Python file is `runtime/qmp.py`. It runs inside the runtime image (Debian, Python 3.13),
+  so `runtime/ruff.toml` sets `target-version = "py313"`. It is a frozen runtime image input and is
+  excluded from ruff while the image is frozen (see `AGENTS.md`).
 
 ## Sources
 

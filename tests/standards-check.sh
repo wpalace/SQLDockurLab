@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
-# Runs the Formatting-section checks of every coding-standards skill used here
-# (.standards/skills/*).
+# Runs the formatter and linter checks for every language in the repository (docs/CI.md,
+# docs/style/*.md); CI runs the same checks.
 # A host tool is used when it is installed, otherwise its pinned container image.
 # Exit 0 only when every check passes. Usage: tests/standards-check.sh [--fix]
 #   --fix  run the formatters (shfmt -w, Invoke-Formatter, terraform fmt, ruff format) first
@@ -52,7 +52,7 @@ bash_files() {
   while IFS= read -r f; do
     [[ " ${FROZEN_SHELL[*]} " == *" $f "* ]] && continue
     printf '%s\n' "$f"
-  done < <(git ls-files -- '*.sh' '*.bash' lab deploy/gcp/lab-gcp ':!:.standards/**')
+  done < <(git ls-files -- '*.sh' '*.bash' lab deploy/gcp/lab-gcp)
 }
 
 check_bash() {
@@ -64,7 +64,7 @@ check_bash() {
   fi
   tool shfmt "$SHFMT_IMAGE" -d -i 2 -ci -bn "${files[@]}" || fail shfmt
   step "bash: shellcheck"
-  mapfile -t files < <(git ls-files -- '*.sh' '*.bash' lab deploy/gcp/lab-gcp ':!:.standards/**')
+  mapfile -t files < <(git ls-files -- '*.sh' '*.bash' lab deploy/gcp/lab-gcp)
   tool shellcheck "$SHELLCHECK_IMAGE" -x "${files[@]}" || fail shellcheck
 }
 
@@ -87,10 +87,10 @@ check_powershell() {
 check_docker() {
   step "docker: hadolint"
   local files
-  mapfile -t files < <(git ls-files -- '*Dockerfile*' '*.dockerfile' ':!:.standards/**')
+  mapfile -t files < <(git ls-files -- '*Dockerfile*' '*.dockerfile')
   tool hadolint "$HADOLINT_IMAGE" -c .hadolint.yaml "${files[@]}" || fail hadolint
   step "docker: yamllint -c .yamllint.yaml"
-  mapfile -t files < <(git ls-files -- '*.yml' '*.yaml' ':!:.standards/**')
+  mapfile -t files < <(git ls-files -- '*.yml' '*.yaml')
   tool yamllint "$YAMLLINT_IMAGE" -c .yamllint.yaml "${files[@]}" || fail yamllint
   step "docker: docker compose config --quiet"
   "$DOCKER" compose -f compose.yml -f compose.vhost.yml --env-file lab.env config --quiet \

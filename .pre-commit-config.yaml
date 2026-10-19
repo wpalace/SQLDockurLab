@@ -1,7 +1,6 @@
-# From .standards/templates/.pre-commit-config.yaml (coding-standards v1.0.0), trimmed to the
-# languages used here (no C#). Frozen runtime image inputs are excluded from shfmt (AGENTS.md).
-# Hook versions match .github/workflows/standards-check.yml. Install: pre-commit install
-exclude: ^\.standards/
+# Optional local hooks; the same checks as CI (docs/CI.md). Frozen runtime image inputs are
+# excluded from shfmt (AGENTS.md). Hook versions match .github/workflows/standards-check.yml.
+# Install: pre-commit install
 
 repos:
   - repo: https://github.com/pre-commit/pre-commit-hooks
@@ -61,4 +60,4 @@ repos:
         name: PSScriptAnalyzer
         language: system
         files: \.(ps1|psm1|psd1)$
-        entry: pwsh -NoProfile -File .standards/scripts/Test-PowerShellStandard.ps1
+        entry: pwsh -NoProfile -File tests/Test-PowerShellFile.ps1

@@ -1,35 +1,67 @@
 #Requires -Version 7.4
 <#
 .SYNOPSIS
-    Runs the house PowerShell standard check (.standards/scripts/Test-PowerShellStandard.ps1) per file.
+    Checks PowerShell files with Invoke-Formatter and Invoke-ScriptAnalyzer.
 .DESCRIPTION
-    Checks every tracked PowerShell file outside .standards/ with Invoke-Formatter and
-    Invoke-ScriptAnalyzer (PSScriptAnalyzerSettings.psd1). PSScriptAnalyzer 1.25 on pwsh 7.6
-    sometimes crashes in UseCorrectCasing (NullReferenceException in CommandInfo.Parameters); a file
-    is retried only for that crash, at most 10 runs (a run that crashes is never accepted, even with exit
-    code 0). Installs PSScriptAnalyzer 1.25 for the current
-    user when missing. Used by tests/standards-check.sh and the standards-check CI workflow.
+    Fails when a file differs from the Invoke-Formatter output or has PSScriptAnalyzer findings
+    (both use PSScriptAnalyzerSettings.psd1). Checks every tracked PowerShell file, or only the
+    files given with -Path. PSScriptAnalyzer 1.25 on pwsh 7.6 sometimes crashes in UseCorrectCasing
+    (NullReferenceException in CommandInfo.Parameters), and after such a crash its command lookup
+    can fail with "The term 'Get-Command' is not recognized". A file is retried only for these two
+    errors, at most 10 runs (a run that crashes is never accepted). Installs PSScriptAnalyzer 1.25 for the
+    current user when missing. Used by tests/standards-check.sh, the standards-check CI workflow
+    and the pre-commit hook (docs/CI.md).
 .PARAMETER Fix
     Rewrite files with Invoke-Formatter before checking them.
+.PARAMETER Path
+    Files to check. Default: every tracked *.ps1, *.psm1 and *.psd1 file.
 .EXAMPLE
     pwsh -NoProfile -File tests/Test-PowerShellFile.ps1 -Fix
+.EXAMPLE
+    pwsh -NoProfile -File tests/Test-PowerShellFile.ps1 lab.ps1 lib/LabHost.psm1
 #>
 [CmdletBinding()]
-param([switch]$Fix)
+param(
+    [switch]$Fix,
+
+    [Parameter(ValueFromRemainingArguments)]
+    [string[]]$Path
+)
 
 Set-StrictMode -Version Latest
 $ErrorActionPreference = 'Stop'
 
 $repo = (Resolve-Path -Path (Join-Path -Path $PSScriptRoot -ChildPath '..')).Path
-Set-Location -Path $repo
 $settings = Join-Path -Path $repo -ChildPath 'PSScriptAnalyzerSettings.psd1'
-$standard = Join-Path -Path $repo -ChildPath '.standards/scripts/Test-PowerShellStandard.ps1'
 
 if (-not (Get-Module -ListAvailable -Name PSScriptAnalyzer | Where-Object Version -GE '1.25.0')) {
     Install-PSResource -Name PSScriptAnalyzer -Version 1.25.0 -Scope CurrentUser -TrustRepository
 }
 
-$files = @(git ls-files -- '*.ps1' '*.psm1' '*.psd1' ':!:.standards/**')
+if ($Path) {
+    $files = @($Path | ForEach-Object { (Resolve-Path -LiteralPath $_).Path })
+} else {
+    Set-Location -Path $repo
+    $files = @(git ls-files -- '*.ps1' '*.psm1' '*.psd1')
+}
+
+# Output: the problems found in one file (empty when the file passes).
+$checkFile = {
+    param([string]$File)
+    $raw = Get-Content -LiteralPath $File -Raw
+    if ([string]::IsNullOrEmpty($raw)) {
+        return
+    }
+    $formatted = Invoke-Formatter -ScriptDefinition $raw -Settings $settings
+    if ($formatted -cne $raw) {
+        "Not formatted: $File (run tests/Test-PowerShellFile.ps1 -Fix)"
+    }
+    Invoke-ScriptAnalyzer -Path $File -Settings $settings |
+        Select-Object -Property ScriptName, Line, Severity, RuleName, Message |
+        Format-Table -AutoSize -Wrap |
+        Out-String -Width 200
+}
+
 $failed = $false
 # Measured on pwsh 7.6.7: up to 4 runs were needed for one file (the race hits about 1 run in 3).
 $maxAttempts = 10
@@ -42,28 +74,23 @@ foreach ($f in $files) {
         }
     }
     foreach ($attempt in 1..$maxAttempts) {
-        $global:LASTEXITCODE = 0 # the standard script ends without exit when the file passes
         try {
-            $out = & $standard -Path $f *>&1 | Out-String
-            $rc = $LASTEXITCODE
+            $out = (& $checkFile -File $f *>&1 | Out-String).Trim()
         } catch {
-            $out = $_ | Out-String
-            $rc = 1
+            $out = ($_ | Out-String).Trim()
         }
-        $crashed = $out -match 'Object reference not set to an instance'
+        $crashed = $out -match "Object reference not set to an instance|The term 'Get-Command' is not recognized"
         if (-not $crashed) {
             break
         }
         if ($attempt -eq $maxAttempts) {
-            $rc = 1
+            $out = "PSScriptAnalyzer crashed on $f in all $maxAttempts runs`n$out"
             break
         }
         Write-Output "PSScriptAnalyzer crashed on $f (known 1.25 UseCorrectCasing race); retry $attempt"
     }
-    if ($out.Trim()) {
+    if ($out) {
         Write-Output $out
-    }
-    if ($rc -ne 0) {
         $failed = $true
     }
 }

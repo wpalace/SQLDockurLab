@@ -1,11 +1,6 @@
----
-name: bash
-description: "House coding standard for Bash 5.x scripts. Use when writing, editing, or reviewing shell scripts (*.sh, *.bash, files with a bash/sh shebang)."
----
+# Bash style guide
 
-# Bash Standards
-
-> **Before calling work done:** run the formatter and linter checks in the Formatting section (`shfmt -d -i 2 -ci -bn . && shellcheck <scripts>`) and fix every finding. Reference config: `.editorconfig` beside this file, which `sync-standards.sh` installs at the project root.
+> **Before calling work done:** run the formatter and linter checks in the Formatting section (`shfmt -d -i 2 -ci -bn . && shellcheck <scripts>`) and fix every finding. Configuration: `.editorconfig` and `.shellcheckrc` at the repository root. `tests/standards-check.sh` runs every check; see [CI.md](../CI.md).
 
 **Targets:** Bash 5.3 (released Jul 2025) on Linux CI and containers. Bash 5.0 is the minimum for shared scripts. macOS ships Bash 3.2, so install a current Bash with Homebrew or write POSIX `sh` instead.
 
@@ -146,6 +141,16 @@ find "$dir" -name '*.log' -mtime +7 -print0 | xargs -0 rm --
 
 - Backticks, `cd` without `|| die`, `cat file | grep`, and secrets in command-line arguments.
 - Using 5.3-only syntax in scripts that may run on older Bash without a version guard.
+
+## In this project
+
+- Files: every `*.sh` plus the extensionless bash scripts `lab` and `deploy/gcp/lab-gcp`.
+- `lab`, `lib/*.sh` and `deploy/gcp/*.sh` are larger than the 150-line guideline above. That is
+  accepted for the operator CLI: keep functions small and the scripts ShellCheck-clean instead.
+- ShellCheck has no global exclusions. Disable a rule only inline, with a reason:
+  `# shellcheck disable=SC2016 # expands in the container`.
+- `runtime/launcher.sh` and `runtime/router.sh` are frozen runtime image inputs (see `AGENTS.md`):
+  ShellCheck checks them, shfmt does not.
 
 ## Sources
 

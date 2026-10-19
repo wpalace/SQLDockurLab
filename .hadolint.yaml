@@ -1,5 +1,4 @@
-# Managed by coding-standards (scripts/sync-standards.sh). Do not edit in projects; change it upstream.
-# Docker standard: pinned bases, non-root, no secrets in layers, clean apt layers.
+# hadolint settings (docs/style/docker.md): pinned bases, non-root, no secrets in layers, clean apt layers.
 failure-threshold: warning
 override:
   error:

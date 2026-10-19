@@ -1,5 +1,4 @@
-# Managed by coding-standards (scripts/sync-standards.sh). Do not edit in projects; change it upstream.
-# PowerShell standard: OTBS braces, 4-space indent, consistent whitespace, 115-column lines.
+# PSScriptAnalyzer and Invoke-Formatter settings (docs/style/powershell.md).
 @{
     IncludeDefaultRules = $true
     Severity            = @('Error', 'Warning', 'Information')

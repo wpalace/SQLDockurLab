@@ -1,8 +1,6 @@
-# Managed by coding-standards (scripts/sync-standards.sh). Do not edit in projects; change it upstream.
-# Python standard: ruff format + ruff check, line length 100, Python 3.14 baseline.
+# ruff settings (docs/style/python.md): ruff format + ruff check, line length 100, Python 3.14 baseline.
 line-length = 100
 target-version = "py314"
-extend-exclude = [".standards"] # vendored standards are checked upstream
 
 [format]
 quote-style = "double"

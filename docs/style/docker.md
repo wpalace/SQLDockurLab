@@ -1,11 +1,6 @@
----
-name: docker
-description: "House coding standard for Dockerfiles and Docker Compose v5. Use when writing, editing, or reviewing Dockerfile*, *.dockerfile, compose*.yaml, docker-compose*.yml, or .dockerignore."
----
+# Docker and Compose style guide
 
-# Docker & Compose Standards
-
-> **Before calling work done:** run the formatter and linter checks in the Formatting section (`hadolint Dockerfile && yamllint -c .yamllint.yaml . && docker compose config --quiet`) and fix every finding. Reference config: `.hadolint.yaml and .yamllint.yaml` beside this file, which `sync-standards.sh` installs at the project root.
+> **Before calling work done:** run the formatter and linter checks in the Formatting section (`hadolint Dockerfile && yamllint -c .yamllint.yaml . && docker compose config --quiet`) and fix every finding. Configuration: `.hadolint.yaml` and `.yamllint.yaml` at the repository root. `tests/standards-check.sh` runs every check; see [CI.md](../CI.md).
 
 **Targets:** Docker Engine 29.x with BuildKit, and Docker Compose v5.x (v5.6.0, Oct 2026), using the Compose Specification. Lifecycle hooks and jobs need Compose v5.3 or later.
 
@@ -164,6 +159,14 @@ docker compose -f compose.yaml -f compose.prod.yaml up -d
 - Secrets in images, build args, or committed `.env` files
 - Short-form `depends_on` and `sleep` loops in place of health conditions
 - Publishing database ports to the host in production
+
+## In this project
+
+- `runtime/Dockerfile` builds the lab runtime image. It runs QEMU/KVM and must run as root with
+  access to `/dev/kvm` and `/dev/net/tun`: the non-root rule does not apply to it. Its inputs are
+  frozen (see `AGENTS.md`).
+- The compose files are `compose.yml`, `compose.vhost.yml` and `build/base/compose.yml`. CI checks
+  them with `docker compose config --quiet` and the committed `lab.env`.
 
 ## Sources
 

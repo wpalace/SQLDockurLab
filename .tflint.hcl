@@ -1,5 +1,4 @@
-# Managed by coding-standards (scripts/sync-standards.sh). Do not edit in projects; change it upstream.
-# Terraform standard: snake_case, typed and documented variables, pinned versions, standard layout.
+# tflint settings (docs/style/terraform.md): snake_case, typed and documented variables, pinned versions, standard layout.
 config {
   call_module_type = "local"
   # CI runs with --minimum-failure-severity=notice so naming and docs findings fail too.

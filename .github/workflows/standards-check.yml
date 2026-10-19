@@ -1,7 +1,7 @@
-# From .standards/templates/.github/workflows/standards-check.yml (coding-standards v1.0.0).
-# Project changes: no C# job; the frozen runtime image inputs (runtime/launcher.sh, runtime/router.sh,
+# Formatter and linter checks for every language in the repository (docs/CI.md).
+# The frozen runtime image inputs (runtime/launcher.sh, runtime/router.sh,
 # runtime/qmp.py; see AGENTS.md) are excluded from shfmt (ruff excludes qmp.py in runtime/ruff.toml);
-# extensionless bash scripts (lab, deploy/gcp/lab-gcp) are included; compose files are named compose.yml.
+# extensionless bash scripts (lab, deploy/gcp/lab-gcp) are included.
 # tests/standards-check.sh runs the same checks locally (containers when a tool is missing).
 name: Standards check
 
@@ -53,12 +53,12 @@ jobs:
           echo "${RUNNER_TEMP}" >> "${GITHUB_PATH}"
       - name: shfmt -d
         run: |
-          git ls-files -z -- '*.sh' '*.bash' lab deploy/gcp/lab-gcp ':!:.standards/**' \
+          git ls-files -z -- '*.sh' '*.bash' lab deploy/gcp/lab-gcp \
             ':!:runtime/launcher.sh' ':!:runtime/router.sh' \
             | xargs -0 -r shfmt -d -i 2 -ci -bn
       - name: shellcheck
         run: |
-          git ls-files -z -- '*.sh' '*.bash' lab deploy/gcp/lab-gcp ':!:.standards/**' \
+          git ls-files -z -- '*.sh' '*.bash' lab deploy/gcp/lab-gcp \
             | xargs -0 -r pipx run --spec "shellcheck-py==${SHELLCHECK_VERSION}" shellcheck -x
 
   powershell:
@@ -71,7 +71,7 @@ jobs:
         shell: pwsh
         run: |
           Install-PSResource -Name PSScriptAnalyzer -Version 1.25.0 -Scope CurrentUser -TrustRepository
-          # Runs .standards/scripts/Test-PowerShellStandard.ps1 per file and retries only the
+          # Checks every file with Invoke-Formatter and Invoke-ScriptAnalyzer and retries only the
           # PSScriptAnalyzer 1.25 UseCorrectCasing crash (see the script).
           ./tests/Test-PowerShellFile.ps1
 

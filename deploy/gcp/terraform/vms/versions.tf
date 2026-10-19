@@ -1,5 +1,5 @@
 terraform {
-  # Exception to the house standard (~> 1.16): operators and the lab hosts run Terraform 1.5+;
+  # >= 1.5 rather than ~> 1.16 (docs/style/terraform.md): operators and the lab hosts run Terraform 1.5+;
   # the configuration uses no newer language features.
   required_version = ">= 1.5"
   required_providers {

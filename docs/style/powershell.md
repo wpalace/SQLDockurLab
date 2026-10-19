@@ -1,11 +1,6 @@
----
-name: powershell
-description: "House coding standard for PowerShell 7.6 LTS. Use when writing, editing, or reviewing PowerShell code (*.ps1, *.psm1, *.psd1)."
----
+# PowerShell style guide
 
-# PowerShell Standards
-
-> **Before calling work done:** run the formatter and linter checks in the Formatting section (`Invoke-ScriptAnalyzer -Path . -Recurse -Settings ./PSScriptAnalyzerSettings.psd1 -EnableExit`) and fix every finding. Reference config: `PSScriptAnalyzerSettings.psd1` beside this file, which `sync-standards.sh` installs at the project root.
+> **Before calling work done:** run the formatter and linter checks in the Formatting section (`Invoke-ScriptAnalyzer -Path . -Recurse -Settings ./PSScriptAnalyzerSettings.psd1 -EnableExit`) and fix every finding. Configuration: `PSScriptAnalyzerSettings.psd1` at the repository root. `tests/standards-check.sh` runs every check; see [CI.md](../CI.md).
 
 **Targets:** PowerShell 7.6 LTS (7.6.7, built on .NET 10, supported until Nov 2028). Windows PowerShell 5.1 only when a host requires it.
 
@@ -160,6 +155,17 @@ Copy-Item @params
 - **Unquoted variables in strings and paths.** Write `"$Path"` and `"$($obj.Prop)"`.
 - Checking `$LASTEXITCODE` by hand when strict native error handling is on.
 - Aliases, positional parameters, and `Write-Host` for data. Hardcoded credentials (use `Microsoft.PowerShell.SecretManagement`).
+
+## In this project
+
+- **Operator front end** (`lab.ps1`, `lib/LabHost.psm1`, `deploy/gcp/lab-gcp.ps1`): PowerShell 7.4+.
+  `Write-Host` is its console UI; the PSScriptAnalyzer finding is suppressed per file with a
+  justification.
+- **Guest scripts** (`guest/*.ps1`, `build/base/oem/lab/*.ps1`) run in Windows PowerShell 5.1 inside
+  the lab VMs. Keep them 5.1-compatible (no `??`, `?:`, `&&`/`||`, `-Parallel`, multi-child
+  `Join-Path`). `tests/validate.ps1` checks them with PSUseCompatibleSyntax (target 5.1).
+- Native commands (`gcloud`, `ssh`, `docker`, `terraform`): check `$LASTEXITCODE` after each call.
+- Run the checks with `tests/Test-PowerShellFile.ps1` (see [CI.md](../CI.md)).
 
 ## Sources
 

@@ -1,11 +1,6 @@
----
-name: terraform
-description: "House coding standard for Terraform 1.16+. Use when writing, editing, or reviewing Terraform code (*.tf, *.tfvars, *.tftest.hcl, *.tfquery.hcl, .terraform.lock.hcl)."
----
+# Terraform style guide
 
-# Terraform Standards
-
-> **Before calling work done:** run the formatter and linter checks in the Formatting section (`terraform fmt -check -recursive && tflint --recursive`) and fix every finding. Reference config: `.tflint.hcl` beside this file, which `sync-standards.sh` installs at the project root.
+> **Before calling work done:** run the formatter and linter checks in the Formatting section (`terraform fmt -check -recursive && tflint --recursive`) and fix every finding. Configuration: `.tflint.hcl` at the repository root. `tests/standards-check.sh` runs every check; see [CI.md](../CI.md).
 
 **Targets:** Terraform 1.16.x (1.16.6, Oct 2026). Set `required_version = "~> 1.16"`, and adopt 1.17 after it reaches GA. OpenTofu (1.13) is largely HCL-compatible, but the two have diverged (Terraform actions and `query`, OpenTofu state encryption), so pick one engine per repo.
 
@@ -169,6 +164,14 @@ terraform test && terraform plan -out=tfplan
 - Local state for shared infrastructure.
 - Building on `count` indexes. Reordering a list destroys and recreates resources.
 - Provisioners (`local-exec`, `remote-exec`). Use cloud-init, images, or actions instead.
+
+## In this project
+
+- Root modules: `deploy/gcp/terraform/shared` and `deploy/gcp/terraform/vms`.
+- `required_version = ">= 1.5"`, not `~> 1.16`: operators and the lab hosts run Terraform 1.5 or
+  later. The Google provider is pinned with `~> 7.0`; commit `.terraform.lock.hcl`.
+- State is local by default (a single-operator lab). `backend.tf.example` shows a GCS backend for
+  teams.
 
 ## Sources
 

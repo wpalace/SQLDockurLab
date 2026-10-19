@@ -1,6 +1,5 @@
 root = true
 
-# BEGIN coding-standards (managed by sync-standards.sh)
 [*]
 charset = utf-8
 end_of_line = lf
@@ -36,15 +35,10 @@ indent_size = 2
 indent_style = space
 indent_size = 2
 max_line_length = 100
-# END coding-standards
 
-# Project-owned (outside the managed block). The runtime image inputs are frozen: any change
+# The runtime image inputs are frozen: any change
 # rebuilds the image, and the image ID is part of the checkpoint fingerprint (lib/common.sh
 # vm_fingerprint), so every checkpoint, published artifact and golden snapshot would stop
 # restoring. Reformat them only together with a planned checkpoint rebuild. See AGENTS.md.
 [runtime/{launcher,router}.sh]
-ignore = true
-
-# Vendored standards are checked upstream.
-[.standards/**]
 ignore = true

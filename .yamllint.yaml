@@ -1,9 +1,6 @@
-# Managed by coding-standards (scripts/sync-standards.sh). Do not edit in projects; change it upstream.
+# yamllint settings (docs/style/docker.md).
 # YAML style for compose files and workflows: 2-space indent, 120-column lines.
 extends: default
-
-ignore: |
-  .standards/
 
 rules:
   line-length:
