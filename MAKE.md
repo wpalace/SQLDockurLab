@@ -13,7 +13,7 @@ Read this file completely before you start. Do the procedures in sequence.
 
 > **WARNING:** The lab uses plain-text, lab-only passwords. Keep `LAB_VNC_BIND=127.0.0.1`. Do not expose the lab ports to a network.
 
-> **CAUTION:** The VM consoles require the console token (`secrets/console-token`, mode 0600, made by `./lab init`). The console URLs contain the token after `#`. Do not write the console URLs in `TRANSCRIPT.md`, in `logs/progress.log`, in chat summaries, or in committed files. To make a new token, run `./lab console rotate`.
+> **CAUTION:** The VM consoles require the console token (`secrets/console-token`, mode 0600, made by `./lab init`). The console URLs contain the token after `#`. Do not write the console URLs in `TRANSCRIPT.md`, in `logs/progress.log`, in chat summaries, or in committed files. To make a new token, run `./lab console rotate`. Make a new token after you share your screen while a console URL is visible, and if the browser profile is synchronized to an account (the browser history keeps the URLs).
 
 > **NOTE:** These are the terms used in this file. *Host* is the Linux computer. *VM* is one of DC1, SQL1, SQL2, SQL3, SQL4. *Checkpoint* is a saved RAM and disk state of all five VMs. *Golden* is the checkpoint with the full availability group (AG).
 
@@ -121,7 +121,7 @@ Read this file completely before you start. Do the procedures in sequence.
 1. Start the build in the background:
    `setsid nohup ./lab build-base > build-base.log 2>&1 < /dev/null &`
 2. Wait 60 s.
-3. If there is a graphical session, `./lab build-base` opens the Windows install console (127.0.0.1:8006, with the console token) in the default browser. If `build-base.log` shows `run ./lab vnc build`, no browser tab opened. Then run `./lab vnc build`. This command opens the console, or prints the URL when there is no graphical session.
+3. If there is a graphical session, `./lab build-base` opens the Windows install console (127.0.0.1:8006, with the console token) in the default browser when the build VM starts (usually less than 1 min after the start). If `build-base.log` shows `run ./lab vnc build`, no browser tab opened. Then run `./lab vnc build`. This command opens the console, or prints the URL when there is no graphical session.
 4. Tell the user that the console is open. If there is no graphical session, tell the user to run `./lab vnc build` in a terminal on the lab host. Do not copy the URL (see the caution in section 0).
 5. Monitor `build-base.log` and `build/base/shared/` every 5-10 min.
 6. Expect these files in `build/base/shared/`, in this order: `phase1.started`, `phase1.done`, `phase2.started`, `sysprep.started`.
@@ -377,6 +377,8 @@ Edit a list in `deploy/gcp/terraform/shared/terraform.tfvars`, then run `./lab g
 
 1. Open a second terminal on the workstation. Run `./lab gcp tunnel VM`. Keep it open.
 2. Run `./lab gcp deploy VM` (add `--checkpoints` to use published checkpoints).
+> **NOTE:** The GCP console path (`./lab gcp tunnel`, `./lab gcp console`) is reviewed and unit-tested, but not yet tested on a real GCP VM. Do one test of `./lab gcp console VM` before you use it for a team.
+
 3. The tunnel gets the console token of the lab host through IAP SSH and prints the console URLs: port 8006 (base build) and ports 6111 to 6115 (DC1, SQL1-SQL4). If a local lab uses these ports on the workstation, the tunnel adds 10000 (`18006`, `16111` to `16115`). The URLs contain the token. Do not copy them (see the caution in section 0).
 4. Make sure that the live watch terminal is open on the workstation. `./lab gcp deploy` and `./lab gcp publish` open it by themselves. It follows the progress log and the deploy log on the lab host (through IAP SSH, with automatic reconnect) and the local `TRANSCRIPT.md`. If it is not open, run `./lab gcp watch-term VM`. The deploy is complete when the log shows `DEPLOY COMPLETE`.
 4a. To see the VM screens, run `./lab gcp console VM` (instead of `./lab gcp tunnel VM` in step 1). This command makes the tunnel and opens the console URLs in the default browser of the workstation. It opens `8006` only while the base build runs. Run it again when `provision.log` shows `waiting for all VMs`. Tell the user which consoles are open.

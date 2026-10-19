@@ -73,7 +73,9 @@ the `UseCorrectCasing` rule with `Object reference not set to an instance of an 
 (a race in `CommandInfo.Parameters`). It is random: about one run in three hits it on some files.
 After such a crash, PSScriptAnalyzer's command lookup can also fail with
 `The term 'Get-Command' is not recognized`. The script therefore checks one file at a time and
-retries a file **only** for these two errors, at most 10 runs. A run that crashed is never counted as a pass; a file that crashes 10 times fails the job.
+retries a file **only** for these two errors, at most 10 runs. The failure can stay in the PowerShell
+session, so each retry runs in a new `pwsh` process (`-NoRetry`). A run that crashed is never counted
+as a pass; a file that crashes 10 times fails the job.
 In the log, a retry looks like this and is harmless:
 
 ```text

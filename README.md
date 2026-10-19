@@ -52,8 +52,13 @@ Console authentication: every console (the VM gateway, which restarts with Docke
 console) requires a per-install random token and accepts only a loopback Origin with the same port.
 `./lab init` makes the token in `secrets/console-token` (gitignored, mode 0600); `./lab console rotate`
 replaces it. The URLs that `./lab vnc` and `./lab gcp console` open carry the token in the URL
-fragment (`#...`), so the browser does not send it in HTTP requests. Do not paste these URLs into
-logs, transcripts or commits.
+fragment (`#...`), so the browser does not send it in HTTP requests. The browser is started with a
+0600 launcher file (`secrets/console-PORT.html`), not with the URL, so the token is not in process
+arguments. Do not paste these URLs into logs, transcripts or commits. The browser history keeps
+them: run `./lab console rotate` after screen sharing or if the browser profile is synchronized.
+During the base build, dockur's own web viewer is off and QEMU's VNC listens on the loopback of
+the build container only; the authenticated console is the only way to the build screen. The GCP
+console path is reviewed and unit-tested, but not yet tested on a real GCP VM.
 
 Docker group: if `./lab doctor` says the session lacks group `docker`, log out and in, or run
 `printf '%s\n' './lab up' | newgrp docker`. Run `sudo ./lab net` once per host boot to pin the

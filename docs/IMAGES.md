@@ -18,24 +18,35 @@ was built and tested with this image. A digest cannot change, so a new upstream 
 not change the build without a review.
 
 The compose file has no default for `LAB_DOCKUR_IMAGE`. If the value is missing, the build stops
-with an error.
+with an error. `./lab build-base` refuses a value that is not in the form
+`repository@sha256:<64 hex>`, and `./lab doctor` reports it. This also applies to a value in
+`lab.local.env`.
 
 ### Change the pin
 
 Do these steps on a lab host with Docker:
 
-1. Pull the new release, and read its version and digest:
+1. Pull the new release by its version tag (for example `6.07`), and read its digest, version
+   and source revision:
 
    ```
-   docker pull docker.io/dockurr/windows:latest
-   docker image inspect --format '{{index .RepoDigests 0}} {{index .Config.Labels "org.opencontainers.image.version"}}' docker.io/dockurr/windows:latest
+   docker pull docker.io/dockurr/windows:X.YY
+   docker image inspect --format '{{index .RepoDigests 0}} {{index .Config.Labels "org.opencontainers.image.version"}} {{index .Config.Labels "org.opencontainers.image.revision"}}' docker.io/dockurr/windows:X.YY
+   docker buildx imagetools inspect docker.io/dockurr/windows:X.YY
    ```
+
+   Make sure that the digest from `imagetools inspect` is the same as the digest in
+   `RepoDigests`, and that the revision is the commit of the tag `vX.YY` on
+   <https://github.com/dockur/windows>.
 
 2. Read the upstream release notes for that version
    (<https://github.com/dockur/windows/releases>). Make sure that the changes do not affect the
    environment variables that `build/base/compose.yml` sets (`HOST_PORTS`, `DISK_TYPE`,
-   `ADAPTER`, `BOOT_MODE` and the others), and that the web viewer and VNC ports (8006, 5900) did
-   not change.
+   `ADAPTER`, `BOOT_MODE` and the others). Read `/run/display.sh`, `/run/server.sh` and
+   `/run/network.sh` in the new image. Make sure that `WEB: "N"` still stops the web viewer,
+   that a `DISPLAY` value other than `vnc` or `web` is still given to QEMU as `-display VALUE`,
+   and that `HOST_PORTS` still keeps ports from the VM. The build console depends on these
+   three items.
 3. Put the new `repository@sha256:...` value in `LAB_DOCKUR_IMAGE` in `lab.env`. Change the
    version in the comment above it and in this page.
 4. Build a new base image: `./lab build-base`. Then do the tests in MAKE.md (TC1 to TC9).
