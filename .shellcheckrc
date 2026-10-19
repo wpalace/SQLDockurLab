@@ -1,2 +1,2 @@
+# Follow sourced files (lib/*.sh). Rules are disabled only inline, with a reason (house standard).
 external-sources=true
-disable=SC2015,SC2012

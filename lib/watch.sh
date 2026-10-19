@@ -31,7 +31,7 @@ SCRIPT
   if [[ -n ${DISPLAY:-}${WAYLAND_DISPLAY:-} ]]; then
     for t in "${LAB_TERMINAL:-}" "${TERMINAL:-}" xdg-terminal-exec x-terminal-emulator gnome-terminal konsole \
       xfce4-terminal ghostty kitty alacritty foot wezterm xterm; do
-      [[ -n $t ]] && type -P "${t%% *}" >/dev/null || continue
+      if [[ -z $t ]] || ! type -P "${t%% *}" >/dev/null; then continue; fi
       case ${t##*/} in
         gnome-terminal) setsid "$t" --title="lab watch: $name" -- bash "$script" >/dev/null 2>&1 & ;;
         xdg-terminal-exec | kitty | foot | ghostty) setsid "$t" bash "$script" >/dev/null 2>&1 & ;;

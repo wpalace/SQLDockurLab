@@ -2,7 +2,7 @@
 # Runs ON the GCP lab VM (./lab gcp check copies and runs it). Verifies the environment the lab
 # needs before anything is deployed. Exit 0 = all required checks passed.
 # Options: --min-cpus N --min-ram-gb N --min-disk-gb N --min-free-gb N --no-io
-set -uo pipefail
+set -uo pipefail # no -e on purpose: every check runs and all failures are reported
 MIN_CPUS=12 MIN_RAM=40 MIN_DISK=200 MIN_FREE=150 IO=1
 while (($#)); do
   case $1 in
@@ -62,8 +62,8 @@ case $nested in *=Y | *=1) ok "nested: $nested" ;;
 "") warn "no kvm_intel/kvm_amd module loaded" ;;
 *) warn "$nested (needed only for L3 guests; the lab runs L2 VMs and does not need it)" ;; esac
 echo "== devices"
-[[ -c /dev/net/tun ]] && ok "/dev/net/tun" || fail "/dev/net/tun missing" "sudo modprobe tun"
-[[ -c /dev/vhost-net ]] && ok "/dev/vhost-net" || warn "/dev/vhost-net missing (optional): sudo modprobe vhost_net"
+if [[ -c /dev/net/tun ]]; then ok "/dev/net/tun"; else fail "/dev/net/tun missing" "sudo modprobe tun"; fi
+if [[ -c /dev/vhost-net ]]; then ok "/dev/vhost-net"; else warn "/dev/vhost-net missing (optional): sudo modprobe vhost_net"; fi
 
 echo "== docker"
 if command -v docker >/dev/null; then
@@ -74,9 +74,11 @@ if command -v docker >/dev/null; then
       warn "daemon reachable only with sudo; group docker not active in this session (reconnect)"
     else fail "$USER is not in group docker" "sudo usermod -aG docker $USER, then reconnect (./lab gcp push does this)"; fi
   else fail "docker daemon not running" "sudo systemctl enable --now docker"; fi
-  docker compose version >/dev/null 2>&1 || sudo -n docker compose version >/dev/null 2>&1 \
-    && ok "$(docker compose version 2>/dev/null || sudo -n docker compose version)" \
-    || fail "docker compose v2 missing" "reinstall Docker Engine with the compose plugin (startup script uses get.docker.com)"
+  if docker compose version >/dev/null 2>&1 || sudo -n docker compose version >/dev/null 2>&1; then
+    ok "$(docker compose version 2>/dev/null || sudo -n docker compose version)"
+  else
+    fail "docker compose v2 missing" "reinstall Docker Engine with the compose plugin (startup script uses get.docker.com)"
+  fi
 else fail "docker not installed" "check /var/log/sql-ag-lab-startup.log; rerun: sudo google_metadata_script_runner startup"; fi
 
 echo "== size"
@@ -84,10 +86,10 @@ cpus=$(nproc)
 ram=$(awk '/MemTotal/ {printf "%d", $2/1024/1024}' /proc/meminfo)
 disk=$(df -Pk "$HOME" | awk 'NR==2 {printf "%d", $2/1024/1024}')
 free=$(df -Pk "$HOME" | awk 'NR==2 {printf "%d", $4/1024/1024}')
-((cpus >= MIN_CPUS)) && ok "vCPUs $cpus (min $MIN_CPUS)" || fail "only $cpus vCPUs (min $MIN_CPUS)" "use a larger machine_type (default n2-standard-16)"
-((ram >= MIN_RAM)) && ok "RAM ${ram} GB (min $MIN_RAM)" || fail "RAM ${ram} GB (min $MIN_RAM)" "use a larger machine_type"
-((disk >= MIN_DISK)) && ok "disk ${disk} GB (min $MIN_DISK)" || fail "disk ${disk} GB (min $MIN_DISK)" "raise disk_size_gb and apply; then grow the filesystem (sudo growpart/resize2fs or reboot)"
-((free >= MIN_FREE)) && ok "free ${free} GB at $HOME (min $MIN_FREE)" || fail "free ${free} GB (min $MIN_FREE)" "delete old checkpoints (./lab delete) or grow the disk"
+if ((cpus >= MIN_CPUS)); then ok "vCPUs $cpus (min $MIN_CPUS)"; else fail "only $cpus vCPUs (min $MIN_CPUS)" "use a larger machine_type (default n2-standard-16)"; fi
+if ((ram >= MIN_RAM)); then ok "RAM ${ram} GB (min $MIN_RAM)"; else fail "RAM ${ram} GB (min $MIN_RAM)" "use a larger machine_type"; fi
+if ((disk >= MIN_DISK)); then ok "disk ${disk} GB (min $MIN_DISK)"; else fail "disk ${disk} GB (min $MIN_DISK)" "raise disk_size_gb and apply; then grow the filesystem (sudo growpart/resize2fs or reboot)"; fi
+if ((free >= MIN_FREE)); then ok "free ${free} GB at $HOME (min $MIN_FREE)"; else fail "free ${free} GB (min $MIN_FREE)" "delete old checkpoints (./lab delete) or grow the disk"; fi
 
 if ((IO)); then
   echo "== disk throughput (2 GiB write, 2 GiB read, direct I/O)"
@@ -117,13 +119,19 @@ else fail "cannot list gs://$bucket as $sa" "shared root must grant roles/storag
 
 echo "== clock"
 if command -v timedatectl >/dev/null; then
-  [[ "$(timedatectl show -p NTPSynchronized --value 2>/dev/null)" == yes ]] && ok "clock synchronized (NTP)" \
-    || warn "clock not reported synchronized: check chronyd/systemd-timesyncd (metadata.google.internal is the NTP server)"
+  if [[ "$(timedatectl show -p NTPSynchronized --value 2>/dev/null)" == yes ]]; then
+    ok "clock synchronized (NTP)"
+  else
+    warn "clock not reported synchronized: check chronyd/systemd-timesyncd (metadata.google.internal is the NTP server)"
+  fi
 else warn "timedatectl missing; clock sync not checked"; fi
 
 echo "== egress"
-curl -fsS -m 5 -o /dev/null https://download.microsoft.com && ok "internet egress (download.microsoft.com)" \
-  || warn "no internet egress: base build and ISO download need Cloud NAT (enable_nat) unless artifacts come from the bucket"
+if curl -fsS -m 5 -o /dev/null https://download.microsoft.com; then
+  ok "internet egress (download.microsoft.com)"
+else
+  warn "no internet egress: base build and ISO download need Cloud NAT (enable_nat) unless artifacts come from the bucket"
+fi
 
 echo
 if ((fails)); then

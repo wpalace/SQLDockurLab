@@ -67,9 +67,13 @@ done
 pass "boot mode: all node ports + listener IP reachable from host"
 
 echo "--- cross-subnet routing through the router container"
-docker run --rm --network lab_b --ip 10.51.0.99 --cap-add NET_ADMIN --entrypoint sh sql-ag-lab/vm:latest -c \
+if docker run --rm --network lab_b --ip 10.51.0.99 --cap-add NET_ADMIN --entrypoint sh sql-ag-lab/vm:latest -c \
   'ip route add 10.50.0.0/24 via 10.51.0.254 && timeout 3 bash -c "exec 3<>/dev/tcp/10.50.0.11/1433; cat <&3"' \
-  | grep -q . && pass "subnet B -> router -> subnet A (SQL1:1433)" || fail "cross-subnet routing"
+  | grep -q .; then
+  pass "subnet B -> router -> subnet A (SQL1:1433)"
+else
+  fail "cross-subnet routing"
+fi
 
 sleep 5
 before=$(uptime_of 10.50.0.11)
@@ -84,10 +88,13 @@ t0=$(date +%s%3N)
 t1=$(date +%s%3N)
 after=$(uptime_of 10.50.0.11)
 echo "    restore wall time: $((t1 - t0)) ms; SQL1 uptime after restore: $after s"
-awk -v l="$LIMIT" -v a="$after" -v b="$before" 'BEGIN { exit !(a >= b && a < b + l) }' \
-  && pass "RAM state restored (uptime continued from $before -> $after, no reboot)" || fail "uptime $after vs $before"
+if awk -v l="$LIMIT" -v a="$after" -v b="$before" 'BEGIN { exit !(a >= b && a < b + l) }'; then
+  pass "RAM state restored (uptime continued from $before -> $after, no reboot)"
+else
+  fail "uptime $after vs $before"
+fi
 dcu=$(uptime_dc 10.50.0.10)
-[[ -n "$dcu" ]] && pass "DC1 restored (uptime $dcu)" || fail "DC1"
+if [[ -n "$dcu" ]]; then pass "DC1 restored (uptime $dcu)"; else fail "DC1"; fi
 
 echo "--- fast in-place resets (containers kept, QEMU respawned on a fresh overlay)"
 for n in 1 2 3; do
@@ -104,15 +111,19 @@ LAB_FAST_RESET=0 "$LAB" reset golden >/dev/null
 t1=$(date +%s%3N)
 u=$(uptime_of 10.50.0.11)
 echo "    full reset (recreate containers): $((t1 - t0)) ms (uptime $u)"
-awk -v l="$LIMIT" -v a="$u" -v b="$before" 'BEGIN { exit !(a >= b && a < b + l) }' && pass "full reset" || fail "full reset uptime $u"
+if awk -v l="$LIMIT" -v a="$u" -v b="$before" 'BEGIN { exit !(a >= b && a < b + l) }'; then pass "full reset"; else fail "full reset uptime $u"; fi
 
 echo "--- chained checkpoint"
 sleep 3
 "$LAB" save second
 "$LAB" up second >/dev/null
 u2=$(uptime_of 10.50.0.11)
-awk -v l="$LIMIT" -v a="$u2" -v b="$before" 'BEGIN { exit !(a > b + 2) }' && pass "chained checkpoint 'second' (uptime $u2)" || fail "second $u2"
-"$LAB" delete golden 2>/dev/null && fail "deleted a parent checkpoint" || pass "refused to delete parent checkpoint"
+if awk -v l="$LIMIT" -v a="$u2" -v b="$before" 'BEGIN { exit !(a > b + 2) }'; then pass "chained checkpoint 'second' (uptime $u2)"; else fail "second $u2"; fi
+if "$LAB" delete golden 2>/dev/null; then
+  fail "deleted a parent checkpoint"
+else
+  pass "refused to delete parent checkpoint"
+fi
 "$LAB" down
 "$LAB" up golden >/dev/null && pass "parent still restorable after child created"
 "$LAB" status

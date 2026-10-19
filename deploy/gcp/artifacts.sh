@@ -93,10 +93,10 @@ key_latest() { # FILE: write the latest key version (mode 600); prints "latest"
     rm -f "$1"
     sm_fail "$err" read
   }
-  [[ -s $1 ]] && grep -q 'PRIVATE KEY' "$1" || {
+  if ! [[ -s $1 ]] || ! grep -q 'PRIVATE KEY' "$1"; then
     rm -f "$1"
     die "the latest version of secret $KEY_SECRET is not an SSH private key"
-  }
+  fi
   echo latest
 }
 pub_key() {

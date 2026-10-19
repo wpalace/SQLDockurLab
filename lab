@@ -73,16 +73,24 @@ cmd_doctor() {
     ok "/dev/kvm present (the docker daemon opens it; optional: sudo usermod -aG kvm \$USER)"
   else
     warn "/dev/kvm missing: enable VT-x/AMD-V in firmware (and nested virt if this host is a VM)"
-    grep -Eqc '(vmx|svm)' /proc/cpuinfo && warn "  the CPU has VT-x/AMD-V: load the module (sudo modprobe kvm_intel or kvm_amd)" \
-      || warn "  the CPU flags show no vmx/svm: enable virtualization in the firmware"
+    if grep -Eqc '(vmx|svm)' /proc/cpuinfo; then
+      warn "  the CPU has VT-x/AMD-V: load the module (sudo modprobe kvm_intel or kvm_amd)"
+    else
+      warn "  the CPU flags show no vmx/svm: enable virtualization in the firmware"
+    fi
     bad=1
   fi
-  [[ -e /dev/net/tun ]] && ok "/dev/net/tun present" || {
+  if [[ -e /dev/net/tun ]]; then
+    ok "/dev/net/tun present"
+  else
     warn "/dev/net/tun missing: sudo modprobe tun"
     bad=1
-  }
-  [[ -e /dev/vhost-net ]] && ok "/dev/vhost-net present (faster VM networking)" \
-    || warn "/dev/vhost-net missing (optional, faster networking): sudo modprobe vhost_net"
+  fi
+  if [[ -e /dev/vhost-net ]]; then
+    ok "/dev/vhost-net present (faster VM networking)"
+  else
+    warn "/dev/vhost-net missing (optional, faster networking): sudo modprobe vhost_net"
+  fi
   if [[ "$($DOCKER info -f '{{.OperatingSystem}}' 2>/dev/null)" == *snap* ]] || [[ "$(command -v docker)" == /snap/* ]]; then
     warn "docker runs as a snap: its confinement can block /dev/kvm, tap devices and bind mounts; use a native Docker Engine"
   fi
@@ -115,26 +123,28 @@ cmd_doctor() {
   local mem_gb
   mem_gb=$(awk '/MemTotal/ {printf "%d", $2/1024/1024}' /proc/meminfo)
   local need=$(((DC1_RAM_MB + 4 * SQL_RAM_MB) / 1024 + 2))
-  ((mem_gb >= need)) && ok "RAM ${mem_gb} GB (lab needs ~${need} GB)" || {
+  if ((mem_gb >= need)); then
+    ok "RAM ${mem_gb} GB (lab needs ~${need} GB)"
+  else
     warn "RAM ${mem_gb} GB < ~${need} GB needed"
     bad=1
-  }
+  fi
   local cpus
   cpus=$(nproc)
   ok "CPUs: $cpus (lab uses $((DC1_CPUS + 4 * SQL_CPUS)) vCPUs)"
   mkdir -p "$LAB_IMAGES_DIR"
   local free_gb
   free_gb=$(df -Pk "$LAB_IMAGES_DIR" | awk 'NR==2 {printf "%d", $4/1024/1024}')
-  ((free_gb >= 120)) && ok "free disk ${free_gb} GB at $LAB_IMAGES_DIR" || warn "only ${free_gb} GB free at $LAB_IMAGES_DIR (recommend >= 120 GB on NVMe)"
-  [[ -f "$LAB_MEDIA_DIR/$LAB_SQL_ISO" ]] && ok "SQL media: $LAB_SQL_ISO" || warn "SQL ISO not found: $LAB_MEDIA_DIR/$LAB_SQL_ISO (needed for provision)"
+  if ((free_gb >= 120)); then ok "free disk ${free_gb} GB at $LAB_IMAGES_DIR"; else warn "only ${free_gb} GB free at $LAB_IMAGES_DIR (recommend >= 120 GB on NVMe)"; fi
+  if [[ -f "$LAB_MEDIA_DIR/$LAB_SQL_ISO" ]]; then ok "SQL media: $LAB_SQL_ISO"; else warn "SQL ISO not found: $LAB_MEDIA_DIR/$LAB_SQL_ISO (needed for provision)"; fi
   if [[ -r /sys/kernel/mm/ksm/run ]]; then
-    [[ "$(cat /sys/kernel/mm/ksm/run)" == 1 ]] && ok "KSM enabled" || warn "KSM off. Optional: echo 1 | sudo tee /sys/kernel/mm/ksm/run (dedupes identical Windows pages across VMs)"
+    if [[ "$(cat /sys/kernel/mm/ksm/run)" == 1 ]]; then ok "KSM enabled"; else warn "KSM off. Optional: echo 1 | sudo tee /sys/kernel/mm/ksm/run (dedupes identical Windows pages across VMs)"; fi
   fi
   local m
   for m in kvm_intel kvm_amd; do
     [[ -r /sys/module/$m/parameters/nested ]] && ok "$m nested=$(cat /sys/module/$m/parameters/nested)"
   done
-  ((bad == 0)) && ok "doctor: all required checks passed" || warn "doctor: fix the warnings above"
+  if ((bad == 0)); then ok "doctor: all required checks passed"; else warn "doctor: fix the warnings above"; fi
   return $bad
 }
 
@@ -227,6 +237,8 @@ cmd_build_base() {
   local last=""
   while [[ "$($DOCKER inspect -f '{{.State.Running}}' lab-base-build 2>/dev/null)" == true ]]; do
     local cur
+    # Newest marker by mtime; the marker names are fixed (phase1.started, sysprep.started, ...).
+    # shellcheck disable=SC2012 # ls -t is the simple way to sort by mtime; names have no odd characters
     cur=$(cd "$bdir/shared" && ls -t ./*.started ./*.done 2>/dev/null | head -1 || true)
     [[ "$cur" != "$last" && -n "$cur" ]] && {
       log "progress: ${cur#./}"

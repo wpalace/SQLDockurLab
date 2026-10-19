@@ -3,7 +3,7 @@
 # Usage: tests/run-tcs.sh [--resets N]   (run from the repository root, lab running at golden)
 # Exit 0 only when ALL tests pass. On success writes logs/tests.passed (commit, fingerprint, time);
 # on any failure removes it. ./lab gcp golden refuses to snapshot without a current tests.passed.
-set -uo pipefail
+set -uo pipefail # no -e on purpose: every check runs and all failures are reported
 cd "$(dirname "$0")/.." || exit 1
 RESETS=10
 [[ ${1:-} == --resets ]] && RESETS=$2
