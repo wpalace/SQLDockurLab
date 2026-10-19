@@ -94,10 +94,17 @@ healthy SQL1 300 >/dev/null || rc=1
 res TC2 $rc "$(dt "$t")"
 t=$(ms)
 rc=0
+# Each console: the page loads, the WebSocket opens with the token (RFB banner), and it is refused
+# without the token and from another origin. Only the port is printed (the URLs carry the token).
 for p in $(./lab vnc urls 2>/dev/null | grep -o 'http://[^ ]*'); do
+  port=${p#http://*:}
+  port=${port%%/*}
   c=$(curl -s -o /dev/null -w '%{http_code}' "$p")
-  echo "  $p $c"
-  [[ $c == 200 ]] || rc=1
+  good=$(python3 tests/console_check.py "$p")
+  notoken=$(python3 tests/console_check.py "${p%%#*}")
+  foreign=$(python3 tests/console_check.py "$p" --origin https://example.com)
+  echo "  :$port page=$c token=${good%% *} no-token=${notoken%% *} other-origin=${foreign%% *}"
+  [[ $c == 200 && $good == accepted* && $notoken == rejected* && $foreign == rejected* ]] || rc=1
 done
 res TC7 $rc "$(dt "$t")"
 # TC8: automatic failover inside subnet A (SQL1 powered off -> SQL2), then back to golden.

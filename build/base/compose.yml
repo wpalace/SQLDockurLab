@@ -1,10 +1,11 @@
 # Stage 1: build the generalized Windows Server 2025 Core base image with dockur.
 # Driven by `./lab build-base`. Runs once (~20-40 min); the VM syspreps itself and
-# powers off, which stops the container. Watch progress at http://127.0.0.1:8006
+# powers off, which stops the container. Watch it: ./lab vnc build (authenticated console on
+# 127.0.0.1:${LAB_BUILD_CONSOLE_PORT}, served by the console service below).
 name: sqlaglab-base
 services:
   base:
-    image: ${LAB_DOCKUR_IMAGE:-docker.io/dockurr/windows:latest}
+    image: ${LAB_DOCKUR_IMAGE:?set LAB_DOCKUR_IMAGE in lab.env (pinned by digest)}
     container_name: lab-base-build
     restart: "no"
     environment:
@@ -24,14 +25,33 @@ services:
       HOST: "LABBASE"
       LOG: "Y"
       REMOVE: "N"
+      # Port 8016 belongs to the console service (same network namespace): not forwarded to the VM.
+      HOST_PORTS: "8016"
     devices:
       - /dev/kvm
       - /dev/net/tun
     cap_add: [NET_ADMIN]
+    # Only the authenticated console is published. dockur's own web viewer (8006 in the container)
+    # and QEMU's VNC (5900) stay inside the container's network namespace.
     ports:
-      - "127.0.0.1:8006:8006"
+      - "127.0.0.1:${LAB_BUILD_CONSOLE_PORT:-8006}:8016"
     volumes:
       - ${LAB_IMAGES_DIR:-../../images}/base-build:/storage
       - ./oem:/oem
       - ./shared:/shared
     stop_grace_period: 2m
+  console:
+    # Authenticated noVNC for the build VM (lib/console/gateway.sh): console token plus a
+    # same-port loopback Origin check, in front of QEMU's VNC server of the base container.
+    image: ${LAB_IMAGE:-sql-ag-lab/vm:latest}
+    container_name: lab-base-console
+    restart: "no"
+    network_mode: "service:base"
+    depends_on: [base]
+    environment:
+      LAB_CONSOLE_BIND: "0.0.0.0" # inside the base container's namespace; published on 127.0.0.1
+    entrypoint: ["sh", "/opt/lab-console/gateway.sh"]
+    command: ["8016=127.0.0.1:5900"]
+    volumes:
+      - ../../lib/console:/opt/lab-console:ro
+      - ../../secrets/console-token:/run/lab/console-token:ro

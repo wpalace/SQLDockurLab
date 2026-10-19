@@ -69,8 +69,10 @@ VM lifecycle (gcloud):
   watch VM               follow the deploy log on the VM (deploy/publish open a live terminal
                          for this by themselves; LAB_WATCH=0 to opt out)
   watch-term VM          open that live terminal now (with the local TRANSCRIPT.md)
-  tunnel VM [--sql] [--socks PORT] [--offset N]
-                         forward VNC (8006, 6111-6115) and optionally SQL to this machine
+  tunnel VM [--sql] [--socks PORT] [--offset N] [--open]
+                         forward the consoles (8006, 6111-6115) and optionally SQL to this
+                         machine; print the authenticated console URLs (--open: open them)
+  console VM             = tunnel VM --open
   snapshot VM [NAME]     snapshot the stopped VM disk (clone path: vms source_snapshot)
   image VM [FAMILY]      make a custom image of the VM disk (fast clone path; VM is stopped)
 
@@ -299,7 +301,7 @@ cmd_deploy() {
   n=$(vm_name "$1")
   shift
   rcmd "$n" "cd $REMOTE_DIR && setsid -f nohup deploy/gcp/remote-deploy.sh $* > logs-gcp-deploy.log 2>&1 < /dev/null; sleep 2; tail -3 logs-gcp-deploy.log" || warn "could not read the deploy log yet (the deploy runs on the VM)"
-  ok "deploy started on $n. Follow it: ./lab gcp watch $1   Consoles: ./lab gcp tunnel $1"
+  ok "deploy started on $n. Follow it: ./lab gcp watch $1   Consoles: ./lab gcp console $1"
   watch_gcp "$1"
 }
 cmd_watch() {
@@ -310,12 +312,31 @@ cmd_watch() {
 }
 
 port_busy() { (exec 3<>"/dev/tcp/127.0.0.1/$1") 2>/dev/null; }
+# Authenticated noVNC URL (same form as lib/common.sh console_url): token in the fragment.
+console_url() { # PORT TOKEN
+  printf 'http://127.0.0.1:%s/vnc.html#autoconnect=1&resize=scale&reconnect=1&reconnect_delay=2000&path=websockify%%3Ftoken%%3D%s' "$1" "$2"
+}
+# The console token of the VM (its secrets/console-token); starts the VM's gateway if needed.
+console_token() { # GCE-NAME
+  local t
+  t=$(rcmd "$1" "cd $REMOTE_DIR && ./lab console >/dev/null 2>&1; ./lab console token" 2>/dev/null | tr -d '\r' | tail -n 1) || true
+  [[ $t =~ ^[0-9a-f]{48}$ ]] && printf '%s' "$t"
+}
+open_url() {
+  if command -v xdg-open >/dev/null; then
+    xdg-open "$1" >/dev/null 2>&1 &
+  elif command -v open >/dev/null; then
+    open "$1"
+  else
+    return 1
+  fi
+}
 cmd_tunnel() {
   ctx
   local n
   n=$(vm_name "$1")
   shift
-  local sql=0 socks="" off="" p
+  local sql=0 socks="" off="" open=0 p
   while (($#)); do
     case $1 in --sql) sql=1 ;; --socks)
       socks=$2
@@ -325,6 +346,7 @@ cmd_tunnel() {
       off=$2
       shift
       ;;
+    --open) open=1 ;;
     *) die "unknown option $1" ;; esac
     shift
   done
@@ -333,21 +355,44 @@ cmd_tunnel() {
     for p in 8006 6111 6112 6113 6114 6115; do port_busy "$p" && off=10000; done
     ((off)) && warn "local ports 8006/6111-6115 are in use (local lab?): forwarding to local port + $off"
   fi
+  local token
+  token=$(console_token "$n") || true
+  [[ -n $token ]] || warn "could not read the console token of $n (update it: ./lab gcp push $n); the consoles will refuse the connection"
   local f=(-N -L "$((8006 + off)):127.0.0.1:8006")
   for p in 6111 6112 6113 6114 6115; do f+=(-L "$((p + off)):127.0.0.1:$p"); done
   if ((sql)); then # the lab networks exist only on the VM: forward each SQL endpoint
     f+=(-L 14330:10.50.0.60:1433 -L 14339:10.51.0.60:1433 -L 14331:10.50.0.11:1433 -L 14332:10.50.0.12:1433 -L 14333:10.51.0.13:1433 -L 14334:10.51.0.14:1433)
   fi
   [[ -n $socks ]] && f+=(-D "$socks")
+  local urls=() u
+  for p in 8006 6111 6112 6113 6114 6115; do urls+=("$(console_url "$((p + off))" "$token")"); done
   log "tunnel to $n (Ctrl-C to stop)"
-  echo "  base build console  http://127.0.0.1:$((8006 + off))"
-  for p in 6111 6112 6113 6114 6115; do echo "  VM console          http://127.0.0.1:$((p + off))/vnc.html?autoconnect=1&resize=scale&reconnect=1"; done
+  # Console URLs go to the terminal only (they contain the console token), never to a log file.
+  echo "  base build console  ${urls[0]}"
+  for u in "${urls[@]:1}"; do echo "  VM console          $u"; done
+  echo "  (the URLs contain the console token: do not copy them into logs or TRANSCRIPT.md)"
   if ((sql)); then
     echo "  SQL listener        127.0.0.1,14330 (subnet A IP; use 14339 when the primary is on SQL3/SQL4)"
     echo "  SQL1..SQL4          127.0.0.1,14331 .. 127.0.0.1,14334 (SQL auth; see ./lab info on the VM)"
   fi
   [[ -n $socks ]] && echo "  SOCKS proxy         127.0.0.1:$socks (reach 10.50.x / 10.51.x directly through it)"
-  gssh "$n" -- -o ExitOnForwardFailure=yes "${f[@]}"
+  if ((! open)); then
+    gssh "$n" -- -o ExitOnForwardFailure=yes "${f[@]}"
+    return
+  fi
+  gssh "$n" -- -o ExitOnForwardFailure=yes "${f[@]}" &
+  local pid=$! i
+  for ((i = 0; i < 120; i++)); do
+    port_busy "$((6111 + off))" && break
+    kill -0 "$pid" 2>/dev/null || die "tunnel to $n stopped"
+    sleep 0.5
+  done
+  for u in "${urls[@]:1}"; do open_url "$u" || break; done
+  # the base build console only while the build runs
+  port_busy "$((8006 + off))" && curl -fs -o /dev/null --max-time 5 "http://127.0.0.1:$((8006 + off))/vnc.html" \
+    && open_url "${urls[0]}"
+  ok "console URLs opened in the default browser"
+  wait "$pid"
 }
 
 cmd_snapshot() { # snapshot of a STOPPED VM's boot disk, for clones (vms entry: source_snapshot = NAME)
@@ -530,9 +575,10 @@ d and e.update(disk_type=d); m and e.update(machine_type=m); print(json.dumps(e)
   cmd_push "$name"
   rcmd "$name" "cd $REMOTE_DIR && deploy/gcp/artifacts.sh key fetch" # Secret Manager; must be the key in the snapshot
   log "first restore of golden (a disk from a snapshot loads blocks on first read: can take minutes)"
-  rcmd "$name" "cd $REMOTE_DIR && LAB_UP_TIMEOUT=1800 ./lab up golden && ./lab console >/dev/null && ./lab health --deep --wait 300"
+  # Each clone gets its own console token (the snapshot carries the token of the build VM).
+  rcmd "$name" "cd $REMOTE_DIR && LAB_UP_TIMEOUT=1800 ./lab up golden && ./lab console rotate >/dev/null && ./lab health --deep --wait 300"
   note "spawn $name ready at golden (create $((t1 - t0)) s, SSH $((t2 - t1)) s, golden $((SECONDS - t2)) s)"
-  ok "$name is at golden. Consoles: ./lab gcp tunnel $name   Remove: ./lab gcp destroy $name"
+  ok "$name is at golden. Consoles: ./lab gcp console $name   Remove: ./lab gcp destroy $name"
 }
 
 cmd_destroy_vm() { # destroy NAME [--yes]: only VMs made by spawn
@@ -604,6 +650,7 @@ main() {
     push) cmd_push "${1:?VM required}" ;;
     deploy) cmd_deploy "${1:?VM required}" "${@:2}" ;;
     watch) cmd_watch "${1:?VM required}" ;;
+    console) cmd_tunnel "${1:?VM required}" "${@:2}" --open ;;
     tunnel) cmd_tunnel "${1:?VM required}" "${@:2}" ;;
     image) cmd_image "$@" ;;
     artifacts)
