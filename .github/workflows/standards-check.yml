@@ -71,7 +71,25 @@ jobs:
         shell: pwsh
         run: |
           Install-PSResource -Name PSScriptAnalyzer -Version 1.25.0 -Scope CurrentUser -TrustRepository
-          ./.standards/scripts/Test-PowerShellStandard.ps1
+          # One file per run: PSScriptAnalyzer 1.25 sometimes crashes in UseCorrectCasing
+          # (NullReferenceException in CommandInfo.Parameters). Retry only that crash, at most 3 runs
+          # per file (as tests/standards-check.sh).
+          $failed = $false
+          foreach ($f in (git ls-files -- '*.ps1' '*.psm1' '*.psd1' ':!:.standards/**')) {
+              foreach ($attempt in 1..3) {
+                  try {
+                      $out = & ./.standards/scripts/Test-PowerShellStandard.ps1 -Path $f *>&1 | Out-String
+                      $rc = $LASTEXITCODE
+                  } catch {
+                      $out = $_ | Out-String
+                      $rc = 1
+                  }
+                  if ($rc -eq 0 -or $out -notmatch 'Object reference not set to an instance') { break }
+              }
+              if ($out.Trim()) { Write-Output $out }
+              if ($rc -ne 0) { $failed = $true }
+          }
+          if ($failed) { exit 1 }
 
   terraform:
     runs-on: ubuntu-24.04

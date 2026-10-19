@@ -82,15 +82,37 @@ check_powershell() {
             if ($new -cne $raw) { [IO.File]::WriteAllText((Resolve-Path -LiteralPath $f), $new) }
         }
     }
-    ./.standards/scripts/Test-PowerShellStandard.ps1'
+    # One file per run: PSScriptAnalyzer 1.25 on pwsh 7.6 sometimes crashes in UseCorrectCasing
+    # (NullReferenceException in CommandInfo.Parameters). Retry only that crash, at most 3 runs per file.
+    $failed = $false
+    foreach ($f in (git ls-files -- "*.ps1" "*.psm1" "*.psd1" ":!:.standards/**")) {
+        foreach ($attempt in 1..3) {
+            try {
+                $out = & ./.standards/scripts/Test-PowerShellStandard.ps1 -Path $f *>&1 | Out-String
+                $rc = $LASTEXITCODE
+            } catch {
+                $out = $_ | Out-String
+                $rc = 1
+            }
+            if ($rc -eq 0 -or $out -notmatch "Object reference not set to an instance") { break }
+            Write-Output "PSScriptAnalyzer crashed on $f (known 1.25 UseCorrectCasing race); retrying"
+        }
+        if ($out.Trim()) { Write-Output $out }
+        if ($rc -ne 0) { $failed = $true }
+    }
+    if ($failed) { exit 1 }'
+  run_pwsh "$script" || fail PSScriptAnalyzer
+}
+
+run_pwsh() {
+  local script=$1
   if type -P pwsh >/dev/null; then
-    STANDARDS_FIX="$fix" pwsh -NoProfile -Command "$script" || fail PSScriptAnalyzer
+    STANDARDS_FIX="$fix" pwsh -NoProfile -Command "$script"
   else
     # shellcheck disable=SC2016 # $PWD and $0 expand in the container's bash, not here.
     "$DOCKER" run --rm -e STANDARDS_FIX="$fix" -e HOME=/tmp -u "$(id -u):$(id -g)" \
       -v "$REPO_ROOT:$REPO_ROOT" -w "$REPO_ROOT" "$PWSH_IMAGE" \
-      bash -c 'git config --global --add safe.directory "$PWD" && pwsh -NoProfile -Command "$0"' "$script" \
-      || fail PSScriptAnalyzer
+      bash -c 'git config --global --add safe.directory "$PWD" && pwsh -NoProfile -Command "$0"' "$script"
   fi
 }
 
