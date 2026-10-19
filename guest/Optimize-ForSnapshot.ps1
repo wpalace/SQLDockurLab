@@ -20,11 +20,12 @@ $taskPaths = @(
 foreach ($tp in $taskPaths) {
     Get-ScheduledTask -TaskPath $tp -ErrorAction SilentlyContinue | Where-Object State -NE 'Disabled' |
         ForEach-Object {
+            $task = $_ # inside catch, $_ is the error record
             try {
-                $_ | Disable-ScheduledTask | Out-Null
+                $task | Disable-ScheduledTask | Out-Null
             } catch {
                 # Best effort: some system tasks refuse changes; they only add noise, never block.
-                Write-Verbose "could not disable $($_.TaskName): $($_.Exception.Message)"
+                Write-Verbose "could not disable $($task.TaskName): $($_.Exception.Message)"
             }
         }
 }
