@@ -10,18 +10,29 @@
   The local lab engine (KVM, Docker, QEMU: build-base, provision, up, reset, ...) needs a Linux
   host and stays in bash (./lab). On GCP it runs on the lab host VM; this front end starts it there.
 #>
+[Diagnostics.CodeAnalysis.SuppressMessageAttribute('PSAvoidUsingWriteHost', '',
+    Justification = 'Console UI of the operator front end.')]
+param() # no CmdletBinding: the command line is read from $args
 Set-StrictMode -Version Latest
 $ErrorActionPreference = 'Stop'
-Import-Module (Join-Path $PSScriptRoot 'lib/LabHost.psm1') -Force -DisableNameChecking
+Import-Module -Name (Join-Path -Path $PSScriptRoot -ChildPath 'lib/LabHost.psm1') -Force -DisableNameChecking
 $cmd = if ($args.Count) { [string]$args[0] } else { 'help' }
 [string[]]$rest = if ($args.Count -gt 1) { $args[1..($args.Count - 1)] } else { @() }
 if ($null -eq $rest) { $rest = [string[]]@() }
 switch ($cmd) {
-    'gcp' { & (Join-Path $PSScriptRoot 'deploy/gcp/lab-gcp.ps1') @rest; exit $LASTEXITCODE }
-    'log' { Initialize-LabProgress; if ($rest.Count) { Write-LabProgress ($rest -join ' ') }; exit 0 }
+    'gcp' {
+        & (Join-Path -Path $PSScriptRoot -ChildPath 'deploy/gcp/lab-gcp.ps1') @rest
+        exit $LASTEXITCODE
+    }
+    'log' {
+        Initialize-LabProgress
+        if ($rest.Count) { Write-LabProgress ($rest -join ' ') }
+        exit 0
+    }
     'watch' {
         Initialize-LabProgress
-        Open-LabWatch -Name local -Force -Body "Get-Content -LiteralPath '$((Get-ProgressLog).Replace("'", "''"))', 'TRANSCRIPT.md' -Tail 100 -Wait"
+        $logq = (Get-ProgressLog).Replace("'", "''")
+        Open-LabWatch -Name local -Force -Body "Get-Content -LiteralPath '$logq', 'TRANSCRIPT.md' -Tail 100 -Wait"
         exit 0
     }
     { $_ -in 'help', '-h', '--help' } {
@@ -37,5 +48,10 @@ host with KVM and Docker: use ./lab (bash) there. On GCP they run on the VM (./l
 '@ | Write-Host
         exit 0
     }
-    default { Write-Host "  error unknown command '$cmd' (the local lab engine is ./lab on a Linux host; see ./lab.ps1 help)" -ForegroundColor Red; exit 1 }
+    default {
+        $message = "  error unknown command '$cmd' " +
+        '(the local lab engine is ./lab on a Linux host; see ./lab.ps1 help)'
+        Write-Host $message -ForegroundColor Red
+        exit 1
+    }
 }

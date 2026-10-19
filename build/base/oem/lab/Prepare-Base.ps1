@@ -8,6 +8,11 @@
   hook, then reboots into phase 2 (Finalize-Base.ps1 -> sysprep -> power off).
   Windows PowerShell 5.1 compatible.
 #>
+[Diagnostics.CodeAnalysis.SuppressMessageAttribute('PSAvoidUsingWriteHost', '',
+    Justification = 'Base image build log (transcript) read by the host.')]
+[Diagnostics.CodeAnalysis.SuppressMessageAttribute('PSUseApprovedVerbs', '',
+    Justification = 'Try-Do is a private best-effort helper; renaming needs a base image rebuild.')]
+param()
 Set-StrictMode -Version Latest
 $ErrorActionPreference = 'Stop'
 $LabRoot = 'C:\Lab'
@@ -28,7 +33,9 @@ function Publish-Status([string]$name) {
 
 # New-Item -Force on an existing registry key tries to delete and recreate it, which
 # fails on keys with protected subkeys (e.g. ServerManager). Only create when missing.
-function Initialize-RegKey([string]$path) { if (-not (Test-Path $path)) { New-Item -Path $path -Force | Out-Null } }
+function Initialize-RegKey([string]$path) {
+    if (-not (Test-Path $path)) { New-Item -Path $path -Force | Out-Null }
+}
 # Any terminating error: publish a failure marker + logs so the host stops waiting.
 trap {
     Write-Warning "FATAL: $($_.Exception.Message) at $($_.InvocationInfo.PositionMessage)"
@@ -84,7 +91,9 @@ $rules = @(
 )
 foreach ($x in $rules) {
     if (-not (Get-NetFirewallRule -Name $x.n -ErrorAction SilentlyContinue)) {
-        $a = @{ Name = $x.n; DisplayName = $x.n; Direction = 'Inbound'; Action = 'Allow'; Protocol = $x.p; Profile = 'Any' }
+        $a = @{ Name = $x.n; DisplayName = $x.n; Direction = 'Inbound'; Action = 'Allow'; Protocol = $x.p
+            Profile = 'Any'
+        }
         if ($x.port) { $a.LocalPort = $x.port }
         New-NetFirewallRule @a | Out-Null
     }
@@ -104,8 +113,9 @@ $taskPaths = @(
     '\Microsoft\Windows\Defrag\', '\Microsoft\Windows\Server Manager\', '\Microsoft\Windows\UpdateOrchestrator\',
     '\Microsoft\Windows\WindowsUpdate\', '\Microsoft\Windows\Application Experience\',
     '\Microsoft\Windows\Customer Experience Improvement Program\', '\Microsoft\Windows\Diagnosis\',
-    '\Microsoft\Windows\DiskDiagnostic\', '\Microsoft\Windows\.NET Framework\', '\Microsoft\Windows\Maintenance\',
-    '\Microsoft\Windows\Windows Error Reporting\', '\Microsoft\Windows\Chkdsk\', '\Microsoft\Windows\Data Integrity Scan\'
+    '\Microsoft\Windows\DiskDiagnostic\', '\Microsoft\Windows\.NET Framework\',
+    '\Microsoft\Windows\Maintenance\', '\Microsoft\Windows\Windows Error Reporting\',
+    '\Microsoft\Windows\Chkdsk\', '\Microsoft\Windows\Data Integrity Scan\'
 )
 foreach ($tp in $taskPaths) {
     Get-ScheduledTask -TaskPath $tp -ErrorAction SilentlyContinue | ForEach-Object {
@@ -113,8 +123,10 @@ foreach ($tp in $taskPaths) {
     }
 }
 Initialize-RegKey 'HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion\Schedule\Maintenance'
-Set-ItemProperty 'HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion\Schedule\Maintenance' -Name MaintenanceDisabled -Value 1 -Type DWord
-Set-ItemProperty 'HKLM:\SOFTWARE\Microsoft\Windows\Windows Error Reporting' -Name Disabled -Value 1 -Type DWord -ErrorAction SilentlyContinue
+Set-ItemProperty 'HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion\Schedule\Maintenance' `
+    -Name MaintenanceDisabled -Value 1 -Type DWord
+Set-ItemProperty 'HKLM:\SOFTWARE\Microsoft\Windows\Windows Error Reporting' `
+    -Name Disabled -Value 1 -Type DWord -ErrorAction SilentlyContinue
 Initialize-RegKey 'HKLM:\SOFTWARE\Microsoft\ServerManager'
 Set-ItemProperty 'HKLM:\SOFTWARE\Microsoft\ServerManager' -Name DoNotOpenServerManagerAtLogon -Value 1 -Type DWord
 
@@ -126,20 +138,28 @@ Try-Do 'pagefile' {
     if ($cs.AutomaticManagedPagefile) { $cs | Set-CimInstance -Property @{ AutomaticManagedPagefile = $false } }
     $pf = Get-CimInstance Win32_PageFileSetting -ErrorAction SilentlyContinue
     if ($pf) { $pf | Set-CimInstance -Property @{ InitialSize = 1024; MaximumSize = 2048 } }
-    else { New-CimInstance -ClassName Win32_PageFileSetting -Property @{ Name = 'C:\pagefile.sys'; InitialSize = [uint32]1024; MaximumSize = [uint32]2048 } | Out-Null }
+    else {
+        New-CimInstance -ClassName Win32_PageFileSetting `
+            -Property @{ Name = 'C:\pagefile.sys'; InitialSize = [uint32]1024; MaximumSize = [uint32]2048 } |
+            Out-Null
+    }
 }
 # Prefer IPv4 + disable IPv6 tunnel adapters (keeps cluster networks clean). 0x21.
-Set-ItemProperty 'HKLM:\SYSTEM\CurrentControlSet\Services\Tcpip6\Parameters' -Name DisabledComponents -Value 0x21 -Type DWord
+Set-ItemProperty 'HKLM:\SYSTEM\CurrentControlSet\Services\Tcpip6\Parameters' `
+    -Name DisabledComponents -Value 0x21 -Type DWord
 # Machine account passwords never rotate: restored checkpoints of any age stay valid
 # no matter how far the guest clock moves (TIME_MODE=sync).
 $nl = 'HKLM:\SYSTEM\CurrentControlSet\Services\Netlogon\Parameters'
 Set-ItemProperty $nl -Name DisablePasswordChange -Value 1 -Type DWord
 # Allow clean ACPI shutdown from the lock screen; no shutdown event tracker.
-Set-ItemProperty 'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Policies\System' -Name shutdownwithoutlogon -Value 1 -Type DWord
+Set-ItemProperty 'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Policies\System' `
+    -Name shutdownwithoutlogon -Value 1 -Type DWord
 Initialize-RegKey 'HKLM:\SOFTWARE\Policies\Microsoft\Windows NT\Reliability'
-Set-ItemProperty 'HKLM:\SOFTWARE\Policies\Microsoft\Windows NT\Reliability' -Name ShutdownReasonOn -Value 0 -Type DWord
+Set-ItemProperty 'HKLM:\SOFTWARE\Policies\Microsoft\Windows NT\Reliability' `
+    -Name ShutdownReasonOn -Value 0 -Type DWord
 # Remote UAC filtering off for local admin accounts (lab convenience for remote mgmt).
-Set-ItemProperty 'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Policies\System' -Name LocalAccountTokenFilterPolicy -Value 1 -Type DWord
+Set-ItemProperty 'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Policies\System' `
+    -Name LocalAccountTokenFilterPolicy -Value 1 -Type DWord
 Try-Do 'winrm' { Enable-PSRemoting -Force -SkipNetworkProfileCheck | Out-Null }
 
 Step 'Disable autologon (dockur build user)'
@@ -152,13 +172,16 @@ $scripts = 'C:\Windows\Setup\Scripts'
 New-Item -ItemType Directory -Force -Path $scripts | Out-Null
 Get-ChildItem $scripts -File | Remove-Item -Force   # drop dockur's own setup hooks
 Copy-Item "$LabRoot\SetupComplete.cmd" "$scripts\SetupComplete.cmd" -Force
-$xml = (Get-Content "$LabRoot\unattend-clone.xml" -Raw).Replace('__ADMIN_PASSWORD__', [Security.SecurityElement]::Escape($cfg.password))
+$xml = (Get-Content "$LabRoot\unattend-clone.xml" -Raw).Replace('__ADMIN_PASSWORD__',
+    [Security.SecurityElement]::Escape($cfg.password))
 Set-Content -Path "$LabRoot\unattend-clone.final.xml" -Value $xml -Encoding UTF8
 
 Step 'Register phase 2 (runs as SYSTEM at next boot)'
-$action = New-ScheduledTaskAction -Execute 'powershell.exe' -Argument "-NoProfile -ExecutionPolicy Bypass -File $LabRoot\Finalize-Base.ps1"
+$action = New-ScheduledTaskAction -Execute 'powershell.exe' `
+    -Argument "-NoProfile -ExecutionPolicy Bypass -File $LabRoot\Finalize-Base.ps1"
 $trigger = New-ScheduledTaskTrigger -AtStartup
-Register-ScheduledTask -TaskName 'LabFinalizeBase' -Action $action -Trigger $trigger -User 'SYSTEM' -RunLevel Highest -Force | Out-Null
+Register-ScheduledTask -TaskName 'LabFinalizeBase' -Action $action -Trigger $trigger -User 'SYSTEM' `
+    -RunLevel Highest -Force | Out-Null
 
 Publish-Status 'phase1.done'
 Stop-Transcript | Out-Null

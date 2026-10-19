@@ -1,7 +1,8 @@
 <#
   Shared helpers for sql-ag-lab guest scripts. Windows PowerShell 5.1 compatible.
   Dot-source:  . "$PSScriptRoot\Common.ps1"
-  Exit-code contract with the host orchestrator (./lab):  0 = done, 3010 = reboot required, other = failure.
+  Exit-code contract with the host orchestrator (./lab):
+  0 = done, 3010 = reboot required, other = failure.
 #>
 Set-StrictMode -Version Latest
 $ErrorActionPreference = 'Stop'
@@ -10,8 +11,25 @@ $script:LabGuestRoot = $PSScriptRoot
 $script:LabConfig = $null   # StrictMode: must exist before Get-LabConfig reads it
 New-Item -ItemType Directory -Force -Path 'C:\Lab\logs' | Out-Null
 
-function Write-Step([string]$Message) { Write-Host "==> [$env:COMPUTERNAME $(Get-Date -Format HH:mm:ss)] $Message" }
-function Write-Ok([string]$Message) { Write-Host "    OK  $Message" }
+# Write-Host is the guest progress log: the host orchestrator reads it over SSH and tees it to logs/.
+function Write-Step {
+    [Diagnostics.CodeAnalysis.SuppressMessageAttribute('PSAvoidUsingWriteHost', '',
+        Justification = 'Guest progress log read by the host orchestrator over SSH.')]
+    param([string]$Message)
+    Write-Host "==> [$env:COMPUTERNAME $(Get-Date -Format HH:mm:ss)] $Message"
+}
+function Write-LabLine {
+    [Diagnostics.CodeAnalysis.SuppressMessageAttribute('PSAvoidUsingWriteHost', '',
+        Justification = 'Guest progress log read by the host orchestrator over SSH.')]
+    param([Parameter(ValueFromPipeline)][string]$Message)
+    process { Write-Host $Message }
+}
+function Write-Ok {
+    [Diagnostics.CodeAnalysis.SuppressMessageAttribute('PSAvoidUsingWriteHost', '',
+        Justification = 'Guest progress log read by the host orchestrator over SSH.')]
+    param([string]$Message)
+    Write-Host "    OK  $Message"
+}
 
 function Get-LabConfig {
     if (-not $script:LabConfig) {
@@ -21,13 +39,21 @@ function Get-LabConfig {
 }
 
 function Get-LabCredential {
+    [Diagnostics.CodeAnalysis.SuppressMessageAttribute('PSAvoidUsingConvertToSecureStringWithPlainText', '',
+        Justification = 'The lab password is plain text in lab-config.json by design (disposable lab).')]
+    param()
     $c = Get-LabConfig
     $sec = ConvertTo-SecureString $c.password -AsPlainText -Force
     New-Object System.Management.Automation.PSCredential("$($c.netbios)\Administrator", $sec)
 }
 
 function Wait-Until {
-    param([scriptblock]$Condition, [int]$TimeoutSeconds = 600, [int]$IntervalSeconds = 5, [string]$What = 'condition')
+    param(
+        [scriptblock]$Condition,
+        [int]$TimeoutSeconds = 600,
+        [int]$IntervalSeconds = 5,
+        [string]$What = 'condition'
+    )
     $deadline = (Get-Date).AddSeconds($TimeoutSeconds)
     while ($true) {
         $ok = $false
@@ -48,8 +74,13 @@ function Test-TcpPort([string]$HostName, [int]$Port, [int]$TimeoutMs = 2000) {
 }
 
 # --- SQL (System.Data.SqlClient ships with .NET Framework; no modules needed) -------
-function New-LabSqlConnectionString {
-    param([string]$Server = 'localhost', [string]$Database = 'master', [switch]$MultiSubnetFailover, [int]$Timeout = 15)
+function Get-LabSqlConnectionString {
+    param(
+        [string]$Server = 'localhost',
+        [string]$Database = 'master',
+        [switch]$MultiSubnetFailover,
+        [int]$Timeout = 15
+    )
     $c = Get-LabConfig
     $b = New-Object System.Data.SqlClient.SqlConnectionStringBuilder
     $b['Data Source'] = $Server
@@ -68,7 +99,13 @@ function Invoke-LabSql {
         [string]$Server = 'localhost', [string]$Database = 'master',
         [switch]$MultiSubnetFailover, [int]$CommandTimeout = 300, [switch]$NonQuery
     )
-    $conn = New-Object System.Data.SqlClient.SqlConnection (New-LabSqlConnectionString -Server $Server -Database $Database -MultiSubnetFailover:$MultiSubnetFailover)
+    $connection = @{
+        Server              = $Server
+        Database            = $Database
+        MultiSubnetFailover = $MultiSubnetFailover
+    }
+    $connectionString = Get-LabSqlConnectionString @connection
+    $conn = New-Object -TypeName System.Data.SqlClient.SqlConnection -ArgumentList $connectionString
     try {
         $conn.Open()
         $cmd = $conn.CreateCommand(); $cmd.CommandText = $Query; $cmd.CommandTimeout = $CommandTimeout
@@ -87,7 +124,8 @@ function Wait-LabSql([string]$Server = 'localhost', [int]$TimeoutSeconds = 300) 
 }
 
 function Get-SqlInstanceId {
-    (Get-ItemProperty 'HKLM:\SOFTWARE\Microsoft\Microsoft SQL Server\Instance Names\SQL' -ErrorAction Stop).MSSQLSERVER
+    $key = 'HKLM:\SOFTWARE\Microsoft\Microsoft SQL Server\Instance Names\SQL'
+    (Get-ItemProperty -Path $key -ErrorAction Stop).MSSQLSERVER
 }
 
 # --- Run a script as the domain administrator ---------------------------------------
@@ -95,7 +133,13 @@ function Get-SqlInstanceId {
 # that must talk to AD or other nodes as a domain admin (New-Cluster, SQL setup with a
 # domain service account, dsacls) runs as a one-shot scheduled task with a password logon.
 function Invoke-AsDomainAdmin {
-    param([Parameter(Mandatory)][string]$Script, [string[]]$Arguments = @(), [int]$TimeoutMinutes = 120)
+    [Diagnostics.CodeAnalysis.SuppressMessageAttribute('PSAvoidUsingWriteHost', '',
+        Justification = 'Relays the task log to the guest progress log read over SSH.')]
+    param(
+        [Parameter(Mandatory)][string]$Script,
+        [string[]]$Arguments = @(),
+        [int]$TimeoutMinutes = 120
+    )
     $c = Get-LabConfig
     $path = if ([IO.Path]::IsPathRooted($Script)) { $Script } else { Join-Path $script:LabGuestRoot $Script }
     if (-not (Test-Path $path)) { throw "Script not found: $path" }
@@ -113,9 +157,18 @@ try {
 Set-Content -Path '$rcFile' -Value `$rc
 "@
     $enc = [Convert]::ToBase64String([Text.Encoding]::Unicode.GetBytes($inner))
-    $action = New-ScheduledTaskAction -Execute 'powershell.exe' -Argument "-NoProfile -NonInteractive -ExecutionPolicy Bypass -EncodedCommand $enc"
+    $psArgs = "-NoProfile -NonInteractive -ExecutionPolicy Bypass -EncodedCommand $enc"
+    $action = New-ScheduledTaskAction -Execute 'powershell.exe' -Argument $psArgs
     $task = "LabRunAs-$id"
-    Register-ScheduledTask -TaskName $task -Action $action -User "$($c.netbios)\Administrator" -Password $c.password -RunLevel Highest -Force | Out-Null
+    $register = @{
+        TaskName = $task
+        Action   = $action
+        User     = "$($c.netbios)\Administrator"
+        Password = $c.password
+        RunLevel = 'Highest'
+        Force    = $true
+    }
+    Register-ScheduledTask @register | Out-Null
     try {
         Start-ScheduledTask -TaskName $task
         $deadline = (Get-Date).AddMinutes($TimeoutMinutes)
@@ -125,13 +178,18 @@ Set-Content -Path '$rcFile' -Value `$rc
             Start-Sleep -Seconds 3
             if (Test-Path $log) {
                 $lines = @(Get-Content $log -ErrorAction SilentlyContinue)
-                if ($lines.Count -gt $printed) { $lines[$printed..($lines.Count - 1)] | ForEach-Object { Write-Host "    | $_" }; $printed = $lines.Count }
+                if ($lines.Count -gt $printed) {
+                    $lines[$printed..($lines.Count - 1)] | ForEach-Object { Write-Host "    | $_" }
+                    $printed = $lines.Count
+                }
             }
         }
         Start-Sleep -Milliseconds 500
         if (Test-Path $log) {
             $lines = @(Get-Content $log -ErrorAction SilentlyContinue)
-            if ($lines.Count -gt $printed) { $lines[$printed..($lines.Count - 1)] | ForEach-Object { Write-Host "    | $_" } }
+            if ($lines.Count -gt $printed) {
+                $lines[$printed..($lines.Count - 1)] | ForEach-Object { Write-Host "    | $_" }
+            }
         }
         return [int](Get-Content $rcFile -Raw).Trim()
     } finally {
@@ -144,7 +202,8 @@ Set-Content -Path '$rcFile' -Value `$rc
 # started before the local cluster service was up, it can stay at "Waiting for local WSFC
 # service to start" indefinitely; the fix is to restart SQL Server once the node is Up.
 function Get-LabHadrStatus {
-    try { [int](Invoke-LabSql -Query "SELECT CAST(SERVERPROPERTY('HadrManagerStatus') AS int) AS s").Rows[0].s } catch { -1 }
+    $query = "SELECT CAST(SERVERPROPERTY('HadrManagerStatus') AS int) AS s"
+    try { [int](Invoke-LabSql -Query $query).Rows[0].s } catch { -1 }
 }
 # The SQL Server service SID must be in the cluster ACL or the replica manager waits for
 # WSFC forever (dm_hadr_cluster stays empty). Enable-SqlAlwaysOn/WMI usually add it; the
@@ -159,7 +218,8 @@ function Register-LabAgResourceType {
     $name = 'SQL Server Availability Group'
     if (-not (Get-ClusterResourceType -Name $name -ErrorAction SilentlyContinue)) {
         Write-Step "Registering cluster resource type '$name'"
-        Add-ClusterResourceType -Name $name -Dll "$env:windir\System32\hadrres.dll" -DisplayName $name -ErrorAction Stop | Out-Null
+        $dll = "$env:windir\System32\hadrres.dll"
+        Add-ClusterResourceType -Name $name -Dll $dll -DisplayName $name -ErrorAction Stop | Out-Null
     }
 }
 function Wait-LabHadrReady([int]$TimeoutSeconds = 300) {
@@ -175,6 +235,9 @@ function Wait-LabHadrReady([int]$TimeoutSeconds = 300) {
     Restart-Service MSSQLSERVER -Force
     Start-Service SQLSERVERAGENT -ErrorAction SilentlyContinue
     Wait-LabSql
-    Wait-Until -What 'HADR manager attached to WSFC' -TimeoutSeconds $TimeoutSeconds -IntervalSeconds 3 -Condition { (Get-LabHadrStatus) -eq 1 }
+    $hadrWait = @{ What = 'HADR manager attached to WSFC'; TimeoutSeconds = $TimeoutSeconds; IntervalSeconds = 3 }
+    Wait-Until @hadrWait -Condition {
+        (Get-LabHadrStatus) -eq 1
+    }
     Write-Ok 'HADR manager running'
 }
