@@ -44,9 +44,21 @@ cp ~/Downloads/SQLServer2025-x64-ENU-EntDev.iso media/
 ```
 
 Watch the VMs: `./lab vnc` opens one noVNC tab per VM in the default browser (`xdg-open`), or
-prints the URLs when there is no graphical session; `./lab vnc build` opens the dockur install
-console (:8006). QEMU serves each
-console on `images/run/<vm>.vnc`; `./lab console` runs the websockify gateway on 127.0.0.1:6111-6115.
+prints the URLs when there is no graphical session; `./lab vnc build` opens the install console
+of the base build (:8006; `./lab build-base` opens it by itself). QEMU serves each console on
+`images/run/<vm>.vnc`; `./lab console` runs the websockify gateway on 127.0.0.1:6111-6115.
+
+Console authentication: every console (the VM gateway, which restarts with Docker, and the build
+console) requires a per-install random token and accepts only a loopback Origin with the same port.
+`./lab init` makes the token in `secrets/console-token` (gitignored, mode 0600); `./lab console rotate`
+replaces it. The URLs that `./lab vnc` and `./lab gcp console` open carry the token in the URL
+fragment (`#...`), so the browser does not send it in HTTP requests. The browser is started with a
+0600 launcher file (`secrets/console-PORT.html`), not with the URL, so the token is not in process
+arguments. Do not paste these URLs into logs, transcripts or commits. The browser history keeps
+them: run `./lab console rotate` after screen sharing or if the browser profile is synchronized.
+During the base build, dockur's own web viewer is off and QEMU's VNC listens on the loopback of
+the build container only; the authenticated console is the only way to the build screen. The GCP
+console path is reviewed and unit-tested, but not yet tested on a real GCP VM.
 
 Docker group: if `./lab doctor` says the session lacks group `docker`, log out and in, or run
 `printf '%s\n' './lab up' | newgrp docker`. Run `sudo ./lab net` once per host boot to pin the
@@ -162,7 +174,7 @@ guests** (the build sandbox cannot run KVM guests).
 1. `./lab doctor` and `tests/validate.sh` (static checks), then `sudo -E tests/e2e-fakeguest.sh`.
    That runs the whole runtime pipeline (networks, router, save/restore, resets, chained
    checkpoints) with tiny Linux guests under KVM in ~1 min. It must pass before anything Windows.
-2. `./lab build-base`. Watch http://127.0.0.1:8006. Confirm `build/base/shared/phase1.done` and
+2. `./lab build-base`. Watch the console that it opens (or `./lab vnc build`). Confirm `build/base/shared/phase1.done` and
    `sysprep.started` appear and that the container exits by itself. Then `qemu-img info
    images/base/disk.qcow2` should be roughly 8-14 GB.
 3. `./lab provision` up to the first checkpoint. Check FirstBoot (SMBIOS identity → IP/name),
@@ -200,6 +212,8 @@ guests** (the build sandbox cannot run KVM guests).
 - Disk: base ~12 GB + 3 checkpoints × (5 disks of deltas + ~12-18 GB state) ≈ 70-100 GB.
 - The lab is air-gapped by default (`LAB_INTERNET=0`). Uses lab-only plain-text credentials; never
   expose `LAB_VNC_BIND` beyond localhost.
+- The installer image (`dockurr/windows`) is pinned by digest in `lab.env`. To change it, see
+  [docs/IMAGES.md](docs/IMAGES.md).
 
 ## Layout
 
@@ -209,9 +223,11 @@ compose.yml             runtime: router + 5 VMs   compose.vhost.yml  auto-added 
 runtime/                Dockerfile, launcher.sh (QEMU + checkpoint/respawn), qmp.py, router.sh
 build/base/             stage-1 dockur compose + OEM payload (Prepare/Finalize-Base, FirstBoot, unattend)
 guest/                  provisioning scripts pushed over SSH (DC, join, SQL, WSFC, HADR, AG, listener, tests)
-lib/                    common.sh (ssh/qmp/helpers), provision.sh (stage-2 orchestration)
-tests/                  validate.sh (static), e2e-fakeguest.sh + fakeguest/ (runtime pipeline e2e)
-docs/                   CI.md (CI pipeline and code checks), style/ (style guide per language)
+lib/                    common.sh (ssh/qmp/helpers), provision.sh (stage-2 orchestration),
+                        console/ (authenticated noVNC gateway: gateway.sh, console_auth.py)
+tests/                  validate.sh (static), e2e-fakeguest.sh + fakeguest/ (runtime pipeline e2e),
+                        console_check.py (console authentication check, TC7)
+docs/                   CI.md (CI pipeline and code checks), IMAGES.md (image pins), style/ (style guide per language)
 ci/                     GitHub Actions self-hosted runner example
 ```
 

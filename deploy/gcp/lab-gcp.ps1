@@ -72,8 +72,8 @@ VM lifecycle (gcloud):
   watch VM               follow the deploy log on the VM
   watch-term VM          open the live watch terminal now (with the local TRANSCRIPT.md)
   tunnel VM [--sql] [--socks PORT] [--offset N] [--open]
-                         forward VNC (8006, 6111-6115) and optionally SQL to this machine;
-                         --open opens the console URLs in the default browser
+                         forward the consoles (8006, 6111-6115) and optionally SQL to this
+                         machine; print the authenticated console URLs (--open: open them)
   console VM             = tunnel VM --open
   snapshot VM [NAME]     snapshot the stopped VM disk
   image VM [FAMILY]      make a custom image of the VM disk (VM is stopped)
@@ -504,6 +504,45 @@ function Test-LocalPort([int]$p) {
     $c = [Net.Sockets.TcpClient]::new()
     try { $c.ConnectAsync('127.0.0.1', $p).Wait(300) -and $c.Connected } catch { $false } finally { $c.Dispose() }
 }
+# Authenticated noVNC URL (same form as lib/common.sh console_url): token in the fragment.
+function Get-ConsoleUrl([int]$Port, [string]$Token) {
+    $opts = 'autoconnect=1&resize=scale&reconnect=1&reconnect_delay=2000'
+    "http://127.0.0.1:$Port/vnc.html#$opts&path=websockify%3Ftoken%3D$Token"
+}
+# Launcher file for the browser (secrets/console-gcp-PORT.html, gitignored): the browser gets this
+# path instead of the URL, so the token is not in any process command line. Output: the path.
+function Write-ConsoleLauncher {
+    param(
+        [int]$Port,
+        [string]$Token,
+        [string]$Directory = (Join-Path -Path $LabRoot -ChildPath 'secrets')
+    )
+    if (-not (Test-Path -LiteralPath $Directory)) { $null = New-Item -ItemType Directory -Path $Directory }
+    $userOnly = [IO.UnixFileMode]'UserRead, UserWrite'
+    if (-not $IsWindows) { [IO.File]::SetUnixFileMode($Directory, $userOnly -bor [IO.UnixFileMode]::UserExecute) }
+    $path = Join-Path -Path $Directory -ChildPath "console-gcp-$Port.html"
+    $url = Get-ConsoleUrl -Port $Port -Token $Token
+    $html = '<!doctype html><meta charset="utf-8"><title>lab console</title>' +
+    "<script>location.replace(`"$url`")</script>`n"
+    $o = [IO.FileStreamOptions]::new()
+    $o.Mode = [IO.FileMode]::Create
+    $o.Access = [IO.FileAccess]::Write
+    if (-not $IsWindows) { $o.UnixCreateMode = $userOnly }
+    $fs = [IO.FileStream]::new($path, $o)
+    try {
+        $bytes = [Text.Encoding]::UTF8.GetBytes($html)
+        $fs.Write($bytes, 0, $bytes.Length)
+    } finally { $fs.Dispose() }
+    if (-not $IsWindows) { [IO.File]::SetUnixFileMode($path, $userOnly) }
+    $path
+}
+# The console token of the VM (its secrets/console-token); starts the VM's gateway if needed.
+function Get-ConsoleToken([string]$n) {
+    $o = Get-Rcmd $n "cd $RemoteDir && ./lab console >/dev/null 2>&1; ./lab console token"
+    if (-not $o) { return '' }
+    $t = (($o -split "`n") | Select-Object -Last 1).Trim()
+    if ($t -match '^[0-9a-f]{48}$') { $t } else { '' }
+}
 function Invoke-Tunnel([string]$key, [string[]]$Rest) {
     $Rest = @($Rest | Where-Object { $_ })
     Initialize-GcpContext
@@ -529,6 +568,11 @@ function Invoke-Tunnel([string]$key, [string[]]$Rest) {
             Write-LabWarn "local ports 8006/6111-6115 are in use (local lab?): forwarding to local port + $off"
         }
     }
+    $token = Get-ConsoleToken $n
+    if (-not $token) {
+        Write-LabWarn ("could not read the console token of $n (update it: ./lab.ps1 gcp push $key); " +
+            'the consoles will refuse the connection')
+    }
     Write-GcpLog "tunnel to $n (Ctrl-C to stop)"
     # One IAP SSH session with local forwards. The consoles listen on 127.0.0.1 of the VM and the
     # lab networks exist only on the VM, so IAP TCP forwarding to the VM NIC cannot reach them.
@@ -543,11 +587,11 @@ function Invoke-Tunnel([string]$key, [string[]]$Rest) {
     }
     if ($socks) { $f += @('-D', $socks) }
     if (-not $IsWindows) { $f = @('-o', 'ExitOnForwardFailure=yes') + $f }   # OpenSSH only (Windows: plink)
-    $urls = @("http://127.0.0.1:$(8006 + $off)") + @(6111..6115 | ForEach-Object {
-            "http://127.0.0.1:$($_ + $off)/vnc.html?autoconnect=1&resize=scale&reconnect=1"
-        })
+    $urls = @($vnc | ForEach-Object { Get-ConsoleUrl -Port ($_ + $off) -Token $token })
+    # Console URLs go to the terminal only (they contain the console token), never to a log file.
     Write-Host "  base build console  $($urls[0])"
     $urls[1..5] | ForEach-Object { Write-Host "  VM console          $_" }
+    Write-Host '  (the URLs contain the console token: do not copy them into logs or TRANSCRIPT.md)'
     if ($sql) {
         Write-Host ('  SQL listener        127.0.0.1,14330 ' +
             '(subnet A IP; use 14339 when the primary is on SQL3/SQL4)')
@@ -563,9 +607,13 @@ function Invoke-Tunnel([string]$key, [string[]]$Rest) {
                 Start-Sleep -Milliseconds 500
             }
             if ($proc.HasExited) { Stop-Lab "tunnel to $n stopped (exit $($proc.ExitCode))" }
-            foreach ($u in $urls[1..5]) { Start-Process -FilePath $u }
+            foreach ($p in $vnc[1..5]) {
+                Start-Process -FilePath (Write-ConsoleLauncher -Port ($p + $off) -Token $token)
+            }
             # base build console only while it runs
-            if ((Invoke-WebRequestStatus $urls[0]) -eq 200) { Start-Process -FilePath $urls[0] }
+            if ((Invoke-WebRequestStatus "http://127.0.0.1:$(8006 + $off)/vnc.html") -eq 200) {
+                Start-Process -FilePath (Write-ConsoleLauncher -Port (8006 + $off) -Token $token)
+            }
             Write-LabOk 'console URLs opened in the default browser'
         }
         $proc | Wait-Process
@@ -778,8 +826,9 @@ function Invoke-Spawn([string[]]$a) {
     # Secret Manager; must be the key in the snapshot
     Invoke-Rcmd $name "cd $RemoteDir && deploy/gcp/artifacts.sh key fetch"
     Write-GcpLog 'first restore of golden (a disk from a snapshot loads blocks on first read: can take minutes)'
-    Invoke-Rcmd $name ("cd $RemoteDir && LAB_UP_TIMEOUT=1800 ./lab up golden && ./lab console >/dev/null && " +
-        './lab health --deep --wait 300')
+    # Each clone gets its own console token (the snapshot carries the token of the build VM).
+    Invoke-Rcmd $name ("cd $RemoteDir && LAB_UP_TIMEOUT=1800 ./lab up golden && " +
+        './lab console rotate >/dev/null && ./lab health --deep --wait 300')
     Add-LabNote ("spawn $name ready at golden (create {0:N0} s, SSH {1:N0} s, golden {2:N0} s)" -f
         $t1, ($t2 - $t1), ($sw.Elapsed.TotalSeconds - $t2))
     Write-LabOk "$name is at golden. Consoles: ./lab.ps1 gcp console $name   Remove: ./lab.ps1 gcp destroy $name"

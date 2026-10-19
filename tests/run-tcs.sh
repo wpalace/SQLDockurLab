@@ -94,11 +94,23 @@ healthy SQL1 300 >/dev/null || rc=1
 res TC2 $rc "$(dt "$t")"
 t=$(ms)
 rc=0
+# Each console: the page loads, the WebSocket opens with the token (RFB banner), and it is refused
+# without the token and from another origin. The URL goes to console_check.py on stdin and only the
+# port is printed, so the token is not in argv or in the output. websockify logs request paths
+# (with the token), so the gateway must keep its output discarded: the token is not in docker logs.
 for p in $(./lab vnc urls 2>/dev/null | grep -o 'http://[^ ]*'); do
-  c=$(curl -s -o /dev/null -w '%{http_code}' "$p")
-  echo "  $p $c"
-  [[ $c == 200 ]] || rc=1
+  port=${p#http://*:}
+  port=${port%%/*}
+  c=$(curl -s -o /dev/null -w '%{http_code}' "${p%%#*}")
+  good=$(python3 tests/console_check.py - <<<"$p")
+  notoken=$(python3 tests/console_check.py - --strip-token <<<"$p")
+  foreign=$(python3 tests/console_check.py - --origin https://example.com <<<"$p")
+  echo "  :$port page=$c token=${good%% *} no-token=${notoken%% *} other-origin=${foreign%% *}"
+  [[ $c == 200 && $good == accepted* && $notoken == rejected* && $foreign == rejected* ]] || rc=1
 done
+leaks=$(docker logs lab-novnc 2>&1 | grep -c -F -f secrets/console-token)
+echo "  token in docker logs lab-novnc: $leaks"
+[[ $leaks == 0 ]] || rc=1
 res TC7 $rc "$(dt "$t")"
 # TC8: automatic failover inside subnet A (SQL1 powered off -> SQL2), then back to golden.
 t=$(ms)

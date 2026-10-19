@@ -5,6 +5,10 @@ LAB_ROOT=${LAB_ROOT:-$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)}
 STATE_DIR="$LAB_ROOT/state"
 SECRETS_DIR="$LAB_ROOT/secrets"
 SSH_KEY="$SECRETS_DIR/id_ed25519"
+# Console token: required by the noVNC gateways (lib/console/gateway.sh). Gitignored, mode 0600.
+CONSOLE_TOKEN_FILE="$SECRETS_DIR/console-token"
+# shellcheck disable=SC2034  # used by ./lab: a lab-novnc container without this label is replaced
+CONSOLE_GATEWAY_VERSION=3
 # shellcheck disable=SC2034  # used by ./lab and lib/provision.sh
 VMS=(DC1 SQL1 SQL2 SQL3 SQL4)
 SQL_VMS=(SQL1 SQL2 SQL3 SQL4)
@@ -127,6 +131,49 @@ parallel_vms() { # <action-name> <fn> <vm...>
     fi
   done
   return $rc
+}
+
+# ------------------------------------------------------------------- consoles --
+new_console_token() { # 24 random bytes as hex; written atomically with mode 0600
+  local t
+  mkdir -p "$SECRETS_DIR"
+  chmod 700 "$SECRETS_DIR"
+  t=$(od -An -tx1 -N24 /dev/urandom | tr -d ' \n')
+  [[ $t =~ ^[0-9a-f]{48}$ ]] || die "could not generate the console token"
+  (umask 077 && printf '%s\n' "$t" >"$CONSOLE_TOKEN_FILE.new")
+  mv -f "$CONSOLE_TOKEN_FILE.new" "$CONSOLE_TOKEN_FILE"
+  ok "new console token in secrets/console-token"
+}
+ensure_console_token() {
+  # A directory at this path means Docker created it for a bind mount: refuse, do not use it.
+  [[ -e $CONSOLE_TOKEN_FILE && ! -f $CONSOLE_TOKEN_FILE ]] \
+    && die "$CONSOLE_TOKEN_FILE is not a regular file; remove it (it may be root-owned: sudo rm -r), then run ./lab init"
+  if [[ -s $CONSOLE_TOKEN_FILE ]]; then
+    chmod 600 "$CONSOLE_TOKEN_FILE"
+  else
+    new_console_token
+  fi
+}
+console_url() { # PORT: authenticated noVNC URL; the token is in the fragment (not sent to servers)
+  local host=${LAB_VNC_BIND:-127.0.0.1} token
+  [[ $host == 0.0.0.0 ]] && host=127.0.0.1
+  token=$(<"$CONSOLE_TOKEN_FILE")
+  printf 'http://%s:%s/vnc.html#autoconnect=1&resize=scale&reconnect=1&reconnect_delay=2000&path=websockify%%3Ftoken%%3D%s' \
+    "$host" "$1" "$token"
+}
+
+console_launcher() { # PORT: write secrets/console-PORT.html (mode 0600), print its path
+  # The browser gets this file path, not the URL, so the token is not in any process argv.
+  local f="$SECRETS_DIR/console-$1.html"
+  (umask 077 && printf '<!doctype html><meta charset="utf-8"><title>lab console</title><script>location.replace("%s")</script>\n' \
+    "$(console_url "$1")" >"$f.new")
+  mv -f "$f.new" "$f"
+  printf '%s\n' "$f"
+}
+remove_console_launchers() { rm -f "$SECRETS_DIR"/console-*.html; }
+require_pinned_dockur() { # the installer image must be pinned by digest (lab.local.env can override lab.env)
+  [[ ${LAB_DOCKUR_IMAGE:-} =~ ^[^@[:space:]]+@sha256:[0-9a-f]{64}$ ]] \
+    || die "LAB_DOCKUR_IMAGE must be pinned by digest (repository@sha256:<64 hex>), got '${LAB_DOCKUR_IMAGE:-}'; see docs/IMAGES.md"
 }
 
 # ------------------------------------------------------------------------- ssh --

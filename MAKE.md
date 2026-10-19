@@ -13,6 +13,8 @@ Read this file completely before you start. Do the procedures in sequence.
 
 > **WARNING:** The lab uses plain-text, lab-only passwords. Keep `LAB_VNC_BIND=127.0.0.1`. Do not expose the lab ports to a network.
 
+> **CAUTION:** The VM consoles require the console token (`secrets/console-token`, mode 0600, made by `./lab init`). The console URLs contain the token after `#`. Do not write the console URLs in `TRANSCRIPT.md`, in `logs/progress.log`, in chat summaries, or in committed files. To make a new token, run `./lab console rotate`. Make a new token after you share your screen while a console URL is visible, and if the browser profile is synchronized to an account (the browser history keeps the URLs).
+
 > **NOTE:** These are the terms used in this file. *Host* is the Linux computer. *VM* is one of DC1, SQL1, SQL2, SQL3, SQL4. *Checkpoint* is a saved RAM and disk state of all five VMs. *Golden* is the checkpoint with the full availability group (AG).
 
 ## 1. What you build
@@ -119,13 +121,15 @@ Read this file completely before you start. Do the procedures in sequence.
 1. Start the build in the background:
    `setsid nohup ./lab build-base > build-base.log 2>&1 < /dev/null &`
 2. Wait 60 s.
-3. Run `./lab vnc build`. This opens the Windows install console (http://127.0.0.1:8006) in the default browser. If there is no graphical session, the command prints the URL.
-4. Give the URL to the user.
+3. If there is a graphical session, `./lab build-base` opens the Windows install console (127.0.0.1:8006, with the console token) in the default browser when the build VM starts (usually less than 1 min after the start). If `build-base.log` shows `run ./lab vnc build`, no browser tab opened. Then run `./lab vnc build`. This command opens the console, or prints the URL when there is no graphical session.
+4. Tell the user that the console is open. If there is no graphical session, tell the user to run `./lab vnc build` in a terminal on the lab host. Do not copy the URL (see the caution in section 0).
 5. Monitor `build-base.log` and `build/base/shared/` every 5-10 min.
 6. Expect these files in `build/base/shared/`, in this order: `phase1.started`, `phase1.done`, `phase2.started`, `sysprep.started`.
 7. The build is complete when `build-base.log` shows `base image ready`.
 
-> **CAUTION:** The dockur console shows the Windows setup screens and then a command prompt (sconfig). The lab scripts run hidden. To see their progress, read `build/base/shared/*.txt`.
+> **NOTE:** `LAB_DOCKUR_IMAGE` in `lab.env` pins the installer image (dockur/windows) by digest. Do not change it to a tag. To change the pin, do the procedure in `docs/IMAGES.md`.
+
+> **CAUTION:** The build console shows the Windows setup screens and then a command prompt (sconfig). The lab scripts run hidden. To see their progress, read `build/base/shared/*.txt`.
 
 > **NOTE:** If `build/base/shared/phase1.failed` or `phase2.failed` appears, `build-base` stops. The VM continues to run so that you can examine it. Go to section 9.
 
@@ -134,7 +138,7 @@ Read this file completely before you start. Do the procedures in sequence.
 1. Start provisioning in the background:
    `setsid nohup ./lab provision > provision.log 2>&1 < /dev/null &`
 2. Wait until `provision.log` shows `waiting for all VMs`.
-3. Run `./lab vnc`. This opens one noVNC tab for each VM (DC1, SQL1-SQL4) in the default browser. If there is no graphical session, give the printed URLs to the user.
+3. Run `./lab vnc`. This opens one noVNC tab for each VM (DC1, SQL1-SQL4) in the default browser. If there is no graphical session, tell the user to run `./lab vnc` in a terminal on the lab host. Do not copy the printed URLs.
 4. Monitor `provision.log` every 5 min.
 5. Expect these log lines in this order: `stage 1/3`, `checkpoint 'sql-standalone' saved`, `stage 2/3`, `checkpoint 'cluster' saved`, `stage 3/3`, `HEALTHY`, `failover chain OK`, `HEALTHY`, `checkpoint 'golden' saved`, `provisioning finished`.
    The failover chain is a planned failover SQL1 -> SQL2 -> SQL3 -> SQL4 -> SQL1. After each move, a heartbeat row is written through the listener and must be visible on the new primary. The chain ends with SQL1 as primary and the modes from `lab.env`, before the golden checkpoint is saved. To skip it, set `LAB_FAILOVER_CHAIN=0`.
@@ -159,6 +163,7 @@ Read this file completely before you start. Do the procedures in sequence.
 | Fast reachability check | `./lab health` |
 | Full check (cluster, AG, listener, write) | `./lab health --deep` |
 | Open VM consoles | `./lab vnc` |
+| Make a new console token | `./lab console rotate` |
 | Show status | `./lab status` |
 | PowerShell on a VM | `./lab ssh SQL1` |
 | Planned failover, no data loss | `./lab failover SQL3` |
@@ -186,7 +191,7 @@ Do all these tests after provisioning. Record each result in the summary (sectio
    Run `./lab health --deep --wait 60`. Expected: `listener LabAGL -> SQL3` and `HEALTHY`.
 5. **TC5 Failback.** Do TC4 again on SQL1. Expected: `listener LabAGL -> SQL1`.
 6. **TC6 Reset after change.** Do TC4 again (SQL3 becomes primary). Run `./lab reset`, then `./lab health --deep --wait 60`. Expected: SQL1 is primary, the status is `HEALTHY`, and `./lab status` shows `checkpoint: golden`.
-7. **TC7 Consoles.** Run `./lab vnc`. Expected: five tabs. Each tab title starts with `QEMU (`. If you cannot see the browser, run `./lab vnc urls` and `curl -s -o /dev/null -w '%{http_code}' URL` for each URL. Expected: `200`. Ask the user to confirm that the tabs show the VM screens.
+7. **TC7 Consoles.** Run `./lab vnc`. Expected: five tabs. Each tab title starts with `QEMU (`. If you cannot see the browser, use the TC7 result of `tests/run-tcs.sh`. For each console, TC7 does checks with `tests/console_check.py`. Expected: the page gives `200`, the connection with the token is `accepted`, and the connections without the token and from a different origin are `rejected`. Ask the user to confirm that the tabs show the VM screens.
 8. **TC8 Automatic failover in subnet A.** From golden: write a marker row through the listener, run `./lab kill SQL1`, and wait until the listener reaches SQL2 (`./lab agtool -WaitPrimary SQL2 -Note MARK`). Expected: listener -> SQL2 on 10.50.0.60, `LabDB` writable, the marker row is present. Record the time from power-off to online. Then run `./lab up golden` and `./lab health --deep --wait 60` (SQL1 primary, `HEALTHY`).
 9. **TC9 Automatic failover in subnet B.** From golden: `./lab failover SQL3`. Then `./lab failover-modes "SQL1:SYNCHRONOUS_COMMIT:MANUAL SQL2:SYNCHRONOUS_COMMIT:MANUAL SQL3:SYNCHRONOUS_COMMIT:AUTOMATIC SQL4:SYNCHRONOUS_COMMIT:AUTOMATIC"` and `./lab agtool -WaitSync SQL4`. Write a marker row, run `./lab kill SQL3`, and wait for SQL4. Expected: listener -> SQL4 on 10.51.0.60, the marker row is present. Then `./lab up golden` and the deep health check (SQL1 primary, `HEALTHY`).
 10. When all the tests are complete, run `./lab reset`. Leave the lab running at golden.
@@ -221,6 +226,7 @@ Use the VS Code extension `ms-mssql.mssql` (SQL Server). Windows authentication 
 | `X.ps1 exited N` during `provision` | Guest script error | Read the error text above that line. Fix the script in `guest/`. Then continue from the last checkpoint (step 6.6). |
 | SQL error 35222 or 41105 at `CREATE AVAILABILITY GROUP` | Always On was enabled without its cluster parts | `Enable-Hadr.ps1` and `Wait-LabHadrReady` correct this. Continue from `sql-standalone`. |
 | noVNC tab shows "Disconnected" | The VM container was recreated, or `lab-novnc` is stopped | Run `./lab console stop`, then `./lab vnc`. |
+| noVNC tab shows "Failed to connect to server" | The URL has no token or an old token (after `./lab console rotate`) | Open the console with `./lab vnc` (or `./lab vnc build`) again. Do not type the URL. |
 | Restore fails with a fingerprint error | The runtime image changed after the checkpoint was saved | Run `./lab provision` again. Do not delete the base image. |
 
 > **WARNING:** Do not run `docker system prune` or delete `images/base/`. A new base image takes 35-60 min.
@@ -371,9 +377,11 @@ Edit a list in `deploy/gcp/terraform/shared/terraform.tfvars`, then run `./lab g
 
 1. Open a second terminal on the workstation. Run `./lab gcp tunnel VM`. Keep it open.
 2. Run `./lab gcp deploy VM` (add `--checkpoints` to use published checkpoints).
-3. Give the console URLs that the tunnel prints to the user: `http://127.0.0.1:8006` (base build), `http://127.0.0.1:6111` to `6115` (DC1, SQL1-SQL4). If a local lab uses these ports on the workstation, the tunnel adds 10000 (`18006`, `16111` to `16115`). Use the URLs that the tunnel prints.
+> **NOTE:** The GCP console path (`./lab gcp tunnel`, `./lab gcp console`) is reviewed and unit-tested, but not yet tested on a real GCP VM. Do one test of `./lab gcp console VM` before you use it for a team.
+
+3. The tunnel gets the console token of the lab host through IAP SSH and prints the console URLs: port 8006 (base build) and ports 6111 to 6115 (DC1, SQL1-SQL4). If a local lab uses these ports on the workstation, the tunnel adds 10000 (`18006`, `16111` to `16115`). The URLs contain the token. Do not copy them (see the caution in section 0).
 4. Make sure that the live watch terminal is open on the workstation. `./lab gcp deploy` and `./lab gcp publish` open it by themselves. It follows the progress log and the deploy log on the lab host (through IAP SSH, with automatic reconnect) and the local `TRANSCRIPT.md`. If it is not open, run `./lab gcp watch-term VM`. The deploy is complete when the log shows `DEPLOY COMPLETE`.
-4a. To see the VM screens, open the console URLs (step 3) in a browser on the workstation, for example `xdg-open http://127.0.0.1:6111`. Open `8006` during the base build, and `6111` to `6115` when `provision.log` shows `waiting for all VMs`. Tell the user which URLs are open.
+4a. To see the VM screens, run `./lab gcp console VM` (instead of `./lab gcp tunnel VM` in step 1). This command makes the tunnel and opens the console URLs in the default browser of the workstation. It opens `8006` only while the base build runs. Run it again when `provision.log` shows `waiting for all VMs`. Tell the user which consoles are open.
 5. For SQL access from the workstation, run `./lab gcp tunnel VM --sql`. Connect to `127.0.0.1,14330` (listener) or `127.0.0.1,14331` to `14334` (SQL1-SQL4).
 
 > **NOTE:** The networks 10.50.0.0/24 and 10.51.0.0/24 exist only on the lab host. Use the port forwards, or `--socks PORT` for a SOCKS proxy.
@@ -443,6 +451,7 @@ Edit a list in `deploy/gcp/terraform/shared/terraform.tfvars`, then run `./lab g
 | Start or stop | `./lab gcp start VM`, `./lab gcp stop VM` |
 | Shell on the lab host | `./lab gcp ssh VM` |
 | Consoles and SQL | `./lab gcp tunnel VM [--sql]` |
+| Open the consoles in the browser | `./lab gcp console VM` |
 | Add one VM from tfvars | `./lab gcp create KEY` |
 | Tests, then golden snapshot | `./lab gcp finish VM` |
 | Clone from the golden snapshot | `./lab gcp spawn NAME [--disk-type T]` |

@@ -8,13 +8,16 @@
     files given with -Path. PSScriptAnalyzer 1.25 on pwsh 7.6 sometimes crashes in UseCorrectCasing
     (NullReferenceException in CommandInfo.Parameters), and after such a crash its command lookup
     can fail with "The term 'Get-Command' is not recognized". A file is retried only for these two
-    errors, at most 10 runs (a run that crashes is never accepted). Installs PSScriptAnalyzer 1.25 for the
+    errors, at most 10 runs (a run that crashes is never accepted). The crash can persist in the
+    PowerShell session, so retries run in a new pwsh process. Installs PSScriptAnalyzer 1.25 for the
     current user when missing. Used by tests/standards-check.sh, the standards-check CI workflow
     and the pre-commit hook (docs/CI.md).
 .PARAMETER Fix
     Rewrite files with Invoke-Formatter before checking them.
 .PARAMETER Path
     Files to check. Default: every tracked *.ps1, *.psm1 and *.psd1 file.
+.PARAMETER NoRetry
+    Check the files once in this process, without retries (used for the retries themselves).
 .EXAMPLE
     pwsh -NoProfile -File tests/Test-PowerShellFile.ps1 -Fix
 .EXAMPLE
@@ -23,6 +26,8 @@
 [CmdletBinding()]
 param(
     [switch]$Fix,
+
+    [switch]$NoRetry,
 
     [Parameter(ValueFromRemainingArguments)]
     [string[]]$Path
@@ -74,10 +79,20 @@ foreach ($f in $files) {
         }
     }
     foreach ($attempt in 1..$maxAttempts) {
-        try {
-            $out = (& $checkFile -File $f *>&1 | Out-String).Trim()
-        } catch {
-            $out = ($_ | Out-String).Trim()
+        if ($attempt -eq 1 -or $NoRetry) {
+            try {
+                $out = (& $checkFile -File $f *>&1 | Out-String).Trim()
+            } catch {
+                $out = ($_ | Out-String).Trim()
+            }
+        } else {
+            # A new process: after a crash, the analyzer in this session can keep failing.
+            $pwsh = (Get-Process -Id $PID).Path
+            $out = (& $pwsh -NoProfile -File $PSCommandPath -NoRetry $f *>&1 | Out-String).Trim()
+            $out = ($out -replace '(?m)^\d+ PowerShell files checked$', '').Trim()
+        }
+        if ($NoRetry) {
+            break
         }
         $crashed = $out -match "Object reference not set to an instance|The term 'Get-Command' is not recognized"
         if (-not $crashed) {

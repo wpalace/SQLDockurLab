@@ -43,8 +43,10 @@ Utilities:
   failover-modes MODES   set replica modes ("config" = LAB_AG_MODES), e.g.
                          "SQL3:SYNCHRONOUS_COMMIT:AUTOMATIC SQL4:SYNCHRONOUS_COMMIT:AUTOMATIC"
   kill VM                hard power-off of one VM (failover tests; ./lab up restores)
-  console [VM|stop]      start noVNC gateway; print browser console URLs
-  vnc [build|urls]       open noVNC consoles in the default browser (build = dockur :8006)
+  console [VM|stop|rotate|token]
+                         start the authenticated noVNC gateway; print console URLs
+                         (rotate = new console token; token = print it, for scripts)
+  vnc [build|urls]       open the consoles in the default browser (build = base build VM)
   info                   connection details (IPs, listener, credentials)
   log [MESSAGE]          create logs/progress.log; append a timestamped line
   watch                  open a terminal that follows logs/progress.log + TRANSCRIPT.md
@@ -117,6 +119,12 @@ cmd_doctor() {
     }
   done
   command -v xdg-open >/dev/null || warn "xdg-open missing (optional, for ./lab vnc): $(pkg_hint xdg-open)"
+  if [[ ${LAB_DOCKUR_IMAGE:-} =~ ^[^@[:space:]]+@sha256:[0-9a-f]{64}$ ]]; then
+    ok "installer image pinned by digest (LAB_DOCKUR_IMAGE)"
+  else
+    warn "LAB_DOCKUR_IMAGE is not pinned by digest (repository@sha256:...); ./lab build-base refuses it (docs/IMAGES.md)"
+    bad=1
+  fi
   if command -v aa-status >/dev/null && [[ -d /sys/kernel/security/apparmor ]]; then
     ok "AppArmor active (Docker's default profile allows the lab's /dev/kvm, tun and NET_ADMIN use)"
   fi
@@ -207,18 +215,23 @@ cmd_init() {
   cmd_doctor || warn "continuing despite doctor warnings"
   cmd_image
   ensure_key
+  ensure_console_token
   ensure_net
   mkdir -p "$LAB_IMAGES_DIR"/{base,checkpoints,work,run} "$LAB_MEDIA_DIR"
   ok "init complete"
 }
 
 # ---------------------------------------------------------------- build-base --
+build_vnc_ready() { # QEMU's VNC server in the build container accepts connections (127.0.0.1:5900)
+  $DOCKER exec lab-base-build bash -c 'exec 3<>/dev/tcp/127.0.0.1/5900' >/dev/null 2>&1
+}
 cmd_build_base() {
   local t0=$SECONDS bdir="$LAB_ROOT/build/base" gen="$LAB_ROOT/build/base/oem/lab/generated"
   [[ -f "$LAB_IMAGES_DIR/base/disk.qcow2" && "${1:-}" != --force ]] && {
     ok "base image exists (use --force to rebuild)"
     return 0
   }
+  require_pinned_dockur
   cmd_log
   watch_local
   ensure_key
@@ -232,11 +245,28 @@ cmd_build_base() {
     warn "LAB_WIN_ISO is set: add '- $LAB_MEDIA_DIR/$LAB_WIN_ISO:/custom.iso' to build/base/compose.yml volumes"
   fi
   log "stage 1: dockur installs Windows Server 2025 Core, then Prepare-Base -> reboot -> Finalize-Base -> sysprep -> poweroff"
-  log "watch it at http://127.0.0.1:8006 or run: ./lab vnc build (progress markers appear in build/base/shared/)"
+  ensure_console_token
+  $DOCKER image inspect "$LAB_IMAGE" >/dev/null 2>&1 || cmd_image # the build console runs in it
   $DOCKER compose "${cf[@]}" up -d
-  local last=""
+  # The console tab opens when QEMU's VNC server is up (a tab opened earlier fails to connect).
+  local console=pending
+  have_browser || {
+    console=manual
+    log "console of the build VM: run ./lab vnc build (progress markers appear in build/base/shared/)"
+  }
+  local last="" i
   while [[ "$($DOCKER inspect -f '{{.State.Running}}' lab-base-build 2>/dev/null)" == true ]]; do
     local cur
+    if [[ $console == pending ]]; then
+      for ((i = 0; i < 10; i++)); do
+        build_vnc_ready && break
+        sleep 2
+      done
+      if build_vnc_ready; then
+        cmd_vnc build
+        console=open
+      fi
+    fi
     # Newest marker by mtime; the marker names are fixed (phase1.started, sysprep.started, ...).
     # shellcheck disable=SC2012 # ls -t is the simple way to sort by mtime; names have no odd characters
     cur=$(cd "$bdir/shared" && ls -t ./*.started ./*.done 2>/dev/null | head -1 || true)
@@ -246,9 +276,9 @@ cmd_build_base() {
     }
     if compgen -G "$bdir/shared/*.failed" >/dev/null; then
       tail -n 40 "$bdir"/shared/*.txt >&2 2>/dev/null || true
-      die "guest reported $(cd "$bdir/shared" && echo ./*.failed); VM left running for inspection (http://127.0.0.1:8006)"
+      die "guest reported $(cd "$bdir/shared" && echo ./*.failed); VM left running for inspection (./lab vnc build)"
     fi
-    ((SECONDS - t0 > 4 * 3600)) && die "base build exceeded 4h; inspect http://127.0.0.1:8006"
+    ((SECONDS - t0 > 4 * 3600)) && die "base build exceeded 4h; inspect it: ./lab vnc build"
     sleep 20
   done
   [[ -f "$bdir/shared/sysprep.started" ]] || warn "no sysprep marker seen (SMB markers are best effort); check build/base/shared/*.txt logs"
@@ -475,60 +505,100 @@ cmd_kill() {
   $DOCKER kill "$(vm_container "$vm")" >/dev/null || die "could not stop $vm"
   ok "$vm powered off (QEMU killed). Restore: ./lab up"
 }
+console_gateway_ok() { # the running gateway has the current configuration (authenticated)
+  [[ "$($DOCKER inspect -f '{{.State.Running}} {{index .Config.Labels "lab.console"}}' lab-novnc 2>/dev/null)" == "true $CONSOLE_GATEWAY_VERSION" ]]
+}
 cmd_console() {
-  # ./lab console        -> start the noVNC gateway and print a browser URL per VM
-  # ./lab console VM     -> just that VM's URL;  ./lab console stop -> remove the gateway
-  # QEMU serves VNC on $LAB_IMAGES_DIR/run/<vm>.vnc (unix socket); websockify bridges it.
+  # ./lab console          start the gateway (if needed) and print the console URL of each VM
+  # ./lab console VM       print that VM's URL;   ./lab console stop -> remove the gateway
+  # ./lab console rotate   new console token, gateway restarted (open console tabs must reload)
+  # ./lab console token    print the console token (for scripts, e.g. ./lab gcp tunnel)
+  # QEMU serves VNC on $LAB_IMAGES_DIR/run/<vm>.vnc (unix socket). lib/console/gateway.sh runs
+  # one websockify per VM that requires the console token and a same-port loopback Origin.
   local arg=${1:-}
   arg=${arg^^}
-  if [[ $arg == STOP ]]; then
-    $DOCKER rm -f lab-novnc >/dev/null 2>&1
-    ok "noVNC gateway removed"
-    return
-  fi
-  local vms=(DC1 SQL1 SQL2 SQL3 SQL4) vm v script=""
+  case $arg in
+    STOP)
+      $DOCKER rm -f lab-novnc >/dev/null 2>&1 || true
+      ok "noVNC gateway removed"
+      return
+      ;;
+    TOKEN)
+      ensure_console_token
+      cat "$CONSOLE_TOKEN_FILE"
+      return
+      ;;
+    ROTATE)
+      new_console_token
+      remove_console_launchers
+      $DOCKER rm -f lab-novnc >/dev/null 2>&1 || true
+      if [[ "$($DOCKER inspect -f '{{.State.Running}}' lab-base-console 2>/dev/null)" == true ]]; then
+        $DOCKER restart lab-base-console >/dev/null || warn "could not restart the build console"
+      fi
+      arg=""
+      ;;
+    *) ;;
+  esac
+  ensure_console_token
+  local vms=(DC1 SQL1 SQL2 SQL3 SQL4) vm v specs=()
   [[ -n $arg ]] && vms=("$arg")
   for vm in DC1 SQL1 SQL2 SQL3 SQL4; do
     v="${vm}_VNC_PORT"
-    script+="websockify --web /usr/share/novnc ${LAB_VNC_BIND}:${!v} --unix-target=/images/run/${vm,,}.vnc >/dev/null 2>&1 & "
+    specs+=("${!v}=unix:/images/run/${vm,,}.vnc")
   done
-  if ! $DOCKER ps --format '{{.Names}}' | grep -qx lab-novnc; then
+  if ! console_gateway_ok; then
     $DOCKER rm -f lab-novnc >/dev/null 2>&1 || true
-    $DOCKER run -d --name lab-novnc --network host --restart unless-stopped -v "$LAB_IMAGES_DIR:/images" \
-      --entrypoint sh "$LAB_IMAGE" -c "${script} wait" >/dev/null || die "could not start noVNC gateway"
+    mkdir -p "$LAB_IMAGES_DIR/run"
+    # Only the VNC sockets (read-only); the gateway's token copy is on tmpfs.
+    $DOCKER run -d --name lab-novnc --network host --restart unless-stopped \
+      --label "lab.console=$CONSOLE_GATEWAY_VERSION" -e "LAB_CONSOLE_BIND=$LAB_VNC_BIND" \
+      --mount "type=bind,src=$LAB_IMAGES_DIR/run,dst=/images/run,readonly" \
+      --mount "type=bind,src=$LAB_ROOT/lib/console,dst=/opt/lab-console,readonly" \
+      --mount "type=bind,src=$CONSOLE_TOKEN_FILE,dst=/run/lab/console-token,readonly" \
+      --tmpfs /run/lab-console-tokens:mode=0700,size=64k \
+      --entrypoint sh "$LAB_IMAGE" /opt/lab-console/gateway.sh "${specs[@]}" >/dev/null \
+      || die "could not start noVNC gateway"
   fi
   for vm in "${vms[@]}"; do
     v="${vm}_VNC_PORT"
     [[ -n "${!v:-}" ]] || die "unknown VM $vm"
-    printf '  %-5s http://%s:%s/vnc.html?autoconnect=1&resize=scale&reconnect=1\n' "$vm" "$LAB_VNC_BIND" "${!v}"
+    printf '  %-5s %s\n' "$vm" "$(console_url "${!v}")"
   done
 }
 # ------------------------------------------------------------------ browser consoles --
+have_browser() { command -v xdg-open >/dev/null && [[ -n "${DISPLAY:-}${WAYLAND_DISPLAY:-}" ]]; }
 cmd_vnc() {
   # ./lab vnc         open one noVNC tab per VM (DC1 SQL1-4) in the default browser
-  # ./lab vnc build   open the dockur base-build console (http://127.0.0.1:8006)
+  # ./lab vnc build   open the console of the base build VM (127.0.0.1:$LAB_BUILD_CONSOLE_PORT)
   # ./lab vnc urls    print the URLs only
-  local mode=${1:-vms} urls=() vm v u
+  # The URLs carry the console token in the fragment (#...), which the browser does not send in
+  # HTTP requests. They are printed to the terminal only, never to logs/progress.log. The browser
+  # is started with a 0600 launcher file (secrets/console-PORT.html), so the token is not in argv.
+  local mode=${1:-vms} ports=() vm v p
   case $mode in
-    build) urls=("http://127.0.0.1:8006") ;;
+    build)
+      ensure_console_token
+      ports=("${LAB_BUILD_CONSOLE_PORT:-8006}")
+      ;;
     vms | urls)
       cmd_console >/dev/null
       for vm in DC1 SQL1 SQL2 SQL3 SQL4; do
         v="${vm}_VNC_PORT"
-        urls+=("http://${LAB_VNC_BIND}:${!v}/vnc.html?autoconnect=1&resize=scale&reconnect=1&reconnect_delay=2000")
+        ports+=("${!v}")
       done
       ;;
     *) die "usage: ./lab vnc [build|urls]" ;;
   esac
-  if [[ $mode != urls ]] && command -v xdg-open >/dev/null && [[ -n "${DISPLAY:-}${WAYLAND_DISPLAY:-}" ]]; then
-    for u in "${urls[@]}"; do
-      xdg-open "$u" >/dev/null 2>&1 &
+  if [[ $mode != urls ]] && have_browser; then
+    for p in "${ports[@]}"; do
+      xdg-open "$(console_launcher "$p")" >/dev/null 2>&1 &
       sleep 0.5
     done
-    ok "opened ${#urls[@]} console tab(s) in the default browser"
+    ok "opened ${#ports[@]} console tab(s) in the default browser"
   else
     [[ $mode == urls ]] || log "no graphical session found; open these URLs in a browser on this host:"
-    printf '  %s\n' "${urls[@]}"
+    for p in "${ports[@]}"; do printf '  %s\n' "$(console_url "$p")"; done
+    printf '  (the URLs contain the console token: do not copy them into logs or TRANSCRIPT.md)\n' >&2
   fi
 }
 cmd_info() {

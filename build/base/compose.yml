@@ -1,10 +1,11 @@
 # Stage 1: build the generalized Windows Server 2025 Core base image with dockur.
 # Driven by `./lab build-base`. Runs once (~20-40 min); the VM syspreps itself and
-# powers off, which stops the container. Watch progress at http://127.0.0.1:8006
+# powers off, which stops the container. Watch it: ./lab vnc build (authenticated console on
+# 127.0.0.1:${LAB_BUILD_CONSOLE_PORT}, served by the console service below).
 name: sqlaglab-base
 services:
   base:
-    image: ${LAB_DOCKUR_IMAGE:-docker.io/dockurr/windows:latest}
+    image: ${LAB_DOCKUR_IMAGE:?set LAB_DOCKUR_IMAGE in lab.env (pinned by digest)}
     container_name: lab-base-build
     restart: "no"
     environment:
@@ -24,14 +25,47 @@ services:
       HOST: "LABBASE"
       LOG: "Y"
       REMOVE: "N"
+      # No dockur web viewer; QEMU VNC on the loopback of this network namespace only. The console
+      # service (same namespace) is the only way to the screen: it requires the console token.
+      WEB: "N"
+      DISPLAY: "vnc=127.0.0.1:0"
+      # Not forwarded to the VM: 8016 (console service), 5900 (QEMU VNC), 8006 (no listener).
+      HOST_PORTS: "8016,5900,8006"
     devices:
       - /dev/kvm
       - /dev/net/tun
     cap_add: [NET_ADMIN]
+    # Only the authenticated console is published. QEMU's VNC listens on 127.0.0.1:5900 inside
+    # the namespace; nothing listens on the container address except the console on 8016.
     ports:
-      - "127.0.0.1:8006:8006"
+      - "127.0.0.1:${LAB_BUILD_CONSOLE_PORT:-8006}:8016"
     volumes:
       - ${LAB_IMAGES_DIR:-../../images}/base-build:/storage
       - ./oem:/oem
       - ./shared:/shared
     stop_grace_period: 2m
+  console:
+    # Authenticated noVNC for the build VM (lib/console/gateway.sh): console token plus a
+    # same-port loopback Origin check, in front of QEMU's VNC server of the base container.
+    image: ${LAB_IMAGE:-sql-ag-lab/vm:latest}
+    container_name: lab-base-console
+    restart: "no"
+    network_mode: "service:base"
+    depends_on: [base]
+    environment:
+      LAB_CONSOLE_BIND: "0.0.0.0" # inside the base container's namespace; published on 127.0.0.1
+    entrypoint: ["sh", "/opt/lab-console/gateway.sh"]
+    command: ["8016=127.0.0.1:5900"]
+    volumes:
+      - type: bind
+        source: ../../lib/console
+        target: /opt/lab-console
+        read_only: true
+        bind: {create_host_path: false}
+      - type: bind
+        source: ../../secrets/console-token
+        target: /run/lab/console-token
+        read_only: true
+        bind: {create_host_path: false}
+    tmpfs:
+      - /run/lab-console-tokens:mode=0700,size=64k

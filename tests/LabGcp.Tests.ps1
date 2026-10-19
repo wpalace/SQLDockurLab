@@ -160,3 +160,33 @@ Describe 'key command' {
         { Invoke-Key @('rotate') } | Should -Throw '*usage: key*'
     }
 }
+
+Describe 'console token' {
+    BeforeAll { $script:tok = '0123456789abcdef' * 3 }
+    It 'puts the token in the URL fragment, not in the query' {
+        $u = Get-ConsoleUrl -Port 16111 -Token $script:tok
+        $u | Should -BeLike 'http://127.0.0.1:16111/vnc.html#*'
+        $u | Should -BeLike "*&path=websockify%3Ftoken%3D$($script:tok)"
+        ([uri]$u).Query | Should -BeNullOrEmpty
+    }
+    It 'reads the token from the last output line of the VM' {
+        Mock Get-Rcmd { "some warning`n$($script:tok)`r" }
+        Get-ConsoleToken 'sqlag-bill-1' | Should -Be $script:tok
+    }
+    It 'writes a launcher file with the URL, readable by the owner only' {
+        $dir = Join-Path -Path $TestDrive -ChildPath 's'
+        $f = Write-ConsoleLauncher -Port 16111 -Token $script:tok -Directory $dir
+        $f | Should -BeLike '*console-gcp-16111.html'
+        $url = Get-ConsoleUrl -Port 16111 -Token $script:tok
+        Get-Content -LiteralPath $f -Raw | Should -BeLike "*location.replace(*$url*"
+        if (-not $IsWindows) {
+            [IO.File]::GetUnixFileMode($f) | Should -Be ([IO.UnixFileMode]'UserRead, UserWrite')
+        }
+    }
+    It 'returns an empty token for output that is not a token' {
+        Mock Get-Rcmd { 'usage: ./lab console [VM|stop]' }
+        Get-ConsoleToken 'sqlag-bill-1' | Should -Be ''
+        Mock Get-Rcmd { $null }
+        Get-ConsoleToken 'sqlag-bill-1' | Should -Be ''
+    }
+}

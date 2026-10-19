@@ -26,6 +26,8 @@ File: [`.github/workflows/standards-check.yml`](../.github/workflows/standards-c
 - **Tool versions are pinned** (actions, shfmt, ShellCheck, PSScriptAnalyzer, Terraform, tflint,
   hadolint, yamllint, ruff), so a new tool release cannot break the build by surprise.
   `tests/standards-check.sh` and `.pre-commit-config.yaml` use the same versions.
+  The lab's own container images (the installer image is pinned by digest) are listed in
+  [IMAGES.md](IMAGES.md), with the procedure to change a pin.
 
 The workflow has five jobs. They run in parallel, and each must pass.
 
@@ -71,7 +73,9 @@ the `UseCorrectCasing` rule with `Object reference not set to an instance of an 
 (a race in `CommandInfo.Parameters`). It is random: about one run in three hits it on some files.
 After such a crash, PSScriptAnalyzer's command lookup can also fail with
 `The term 'Get-Command' is not recognized`. The script therefore checks one file at a time and
-retries a file **only** for these two errors, at most 10 runs. A run that crashed is never counted as a pass; a file that crashes 10 times fails the job.
+retries a file **only** for these two errors, at most 10 runs. The failure can stay in the PowerShell
+session, so each retry runs in a new `pwsh` process (`-NoRetry`). A run that crashed is never counted
+as a pass; a file that crashes 10 times fails the job.
 In the log, a retry looks like this and is harmless:
 
 ```text
