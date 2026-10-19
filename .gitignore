@@ -1,5 +1,7 @@
 images/
 media/*.iso
+# Shared media cache for consumer payloads (./lab media; docs/CONSUMERS.md)
+media/cache
 secrets/
 state/
 build/base/shared/*

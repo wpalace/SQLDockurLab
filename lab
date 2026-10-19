@@ -12,6 +12,8 @@ source "$LAB_ROOT/lib/common.sh"
 source "$LAB_ROOT/lib/watch.sh"
 # shellcheck source=lib/provision.sh
 source "$LAB_ROOT/lib/provision.sh"
+# shellcheck source=lib/consumer.sh
+source "$LAB_ROOT/lib/consumer.sh"
 
 usage() {
   cat <<'USAGE'
@@ -37,7 +39,7 @@ Fast path (CI):
   delete NAME            delete a checkpoint (refuses if others depend on it)
 
 Utilities:
-  status                 containers + VM run states
+  status [--json]        containers + VM run states
   ssh VM [cmd]           PowerShell on a VM (DC1 SQL1 SQL2 SQL3 SQL4)
   failover SQLn          planned AG failover without data loss (async target: sync first)
   failover-modes MODES   set replica modes ("config" = LAB_AG_MODES), e.g.
@@ -50,6 +52,20 @@ Utilities:
   watch                  open a terminal that follows logs/progress.log + TRANSCRIPT.md
                          (opens by itself on build-base/provision; LAB_WATCH=0 to opt out)
   net                    (re)create lab networks / pin bridge MACs (idempotent)
+
+Consumer interface (for dependent repos; docs/CONSUMERS.md; exit 0 ok, 1 failure, 2 usage):
+  version [--json]       lab version, consumer contract version and git commit
+  status --json          state, active checkpoint, per-VM state, TCP health, checkpoints
+  inventory [--format json|ansible]
+                         hosts, IPs, ports, domain, cluster, AG, listener, replica roles (no secrets)
+  password [--show]      print LAB_PASSWORD for scripts: LAB_PASSWORD=$(./lab password)
+  media dir|list         shared media cache for consumer payloads (default media/cache)
+  media fetch URL --sha256 HEX [--name FILE]
+                         download once into the cache, verify the checksum (gs:// with gcloud)
+  media iso NAME.iso FILE... [--force]
+                         build an ISO from cache files (tools image)
+  media attach NAME.iso VM...|sql|all   put a cache ISO in the VMs' CD drives (until reset)
+  media eject VM...|sql|all
 
 Deployment targets:
   gcp <command>          Google Cloud: VMs via Terraform, IAP SSH/tunnels, shared bucket
@@ -398,6 +414,8 @@ wait_loaded_and_resume() { # <name> <t0_ms>
 # Fast path: containers stay, QEMU is killed and respawned in place on a fresh overlay.
 cmd_reset() {
   local name=${1:-golden} vm
+  # Check first: a missing checkpoint must not take the running lab down.
+  ckpt_exists "$name" || die "no checkpoint '$name' (./lab list)"
   if [[ "${LAB_FAST_RESET:-1}" == 1 ]] && lab_running && ckpt_exists "$name" \
     && [[ "$($DOCKER exec lab-sql1 cat /run/lab/mode 2>/dev/null)" == restore ]]; then
     local t0
@@ -576,7 +594,10 @@ main() {
     gcp) exec "$LAB_ROOT/deploy/gcp/lab-gcp" "$@" ;; # deployment target: Google Cloud
   esac
   load_env
-  case $cmd in log | watch | doctor | help) ;; *) check_password ;; esac # fail fast: LAB_PASSWORD set and complex
+  case $cmd in
+    log | watch | doctor | help | version | status | inventory | media | list | health) ;;
+    *) check_password ;;
+  esac # fail fast: LAB_PASSWORD set and complex
   case $cmd in build-base | provision | build | up | down | reset | save | delete | init)
     plog "START ./lab $cmd $*"
     # shellcheck disable=SC2064
@@ -608,7 +629,15 @@ main() {
     list) cmd_list ;;
     delete) cmd_delete "$@" ;;
     health) cmd_health "$@" ;;
-    status) cmd_status ;;
+    status)
+      if [[ ${1:-} == --json ]]; then cmd_status_json; elif (($#)); then
+        usage_error "usage: ./lab status [--json]"
+      else cmd_status; fi
+      ;;
+    version) cmd_version "$@" ;;
+    inventory) cmd_inventory "$@" ;;
+    password) cmd_password "$@" ;;
+    media) cmd_media "$@" ;;
     ssh) cmd_ssh "$@" ;;
     failover) cmd_agtool -Target "${1:?usage: ./lab failover SQLn}" ;;
     failover-modes) cmd_agtool -SetModes "${1:?usage: ./lab failover-modes MODES|config}" ;;
