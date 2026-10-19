@@ -10,8 +10,10 @@ $LabRoot = 'C:\Lab'
 Start-Transcript -Path "$LabRoot\logs\finalize-base.txt" -Append | Out-Null
 function Step([string]$m) { Write-Host "==> [Finalize-Base] $(Get-Date -Format s) $m" }
 function Publish-Status([string]$name) {
-    try { Set-Content "\\host.lan\Data\$name" (Get-Date -Format o) -ErrorAction Stop
-          Copy-Item "$LabRoot\logs\*" '\\host.lan\Data\' -Force -ErrorAction SilentlyContinue } catch { }
+    try {
+        Set-Content "\\host.lan\Data\$name" (Get-Date -Format o) -ErrorAction Stop
+        Copy-Item "$LabRoot\logs\*" '\\host.lan\Data\' -Force -ErrorAction SilentlyContinue 
+    } catch { }
 }
 Unregister-ScheduledTask -TaskName 'LabFinalizeBase' -Confirm:$false -ErrorAction SilentlyContinue
 Start-Sleep -Seconds 30   # let boot-time services settle

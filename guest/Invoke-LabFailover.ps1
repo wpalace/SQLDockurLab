@@ -16,7 +16,7 @@
                      wait until the listener reaches SQLn, LabDB is writable, and the row with
                      note N exists; print the time and the listener IP of the connection. #>
 param([string]$Target, [string]$SetModes, [string]$Chain, [switch]$Mark, [string]$WaitSync, [string]$WaitPrimary,
-      [string]$Note, [int]$TimeoutSeconds = 300)
+    [string]$Note, [int]$TimeoutSeconds = 300)
 . "$PSScriptRoot\Common.ps1"
 $c = Get-LabConfig
 $ag = $c.agName; $db = $c.agDatabase

@@ -11,7 +11,7 @@ $script:LabConfig = $null   # StrictMode: must exist before Get-LabConfig reads 
 New-Item -ItemType Directory -Force -Path 'C:\Lab\logs' | Out-Null
 
 function Write-Step([string]$Message) { Write-Host "==> [$env:COMPUTERNAME $(Get-Date -Format HH:mm:ss)] $Message" }
-function Write-Ok([string]$Message)   { Write-Host "    OK  $Message" }
+function Write-Ok([string]$Message) { Write-Host "    OK  $Message" }
 
 function Get-LabConfig {
     if (-not $script:LabConfig) {

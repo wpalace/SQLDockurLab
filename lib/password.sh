@@ -16,13 +16,30 @@ LAB_PASSWORD_HELP="Set the lab password in lab.local.env (gitignored; lab.env ke
 
 password_problem() { # PW -> prints the problem and returns 1; returns 0 when the password is valid
   local p=$1 n=0
-  [[ -z $p || $p == "$LAB_PASSWORD_PLACEHOLDER" ]] && { echo "LAB_PASSWORD is not set (empty or the placeholder $LAB_PASSWORD_PLACEHOLDER)"; return 1; }
-  (( ${#p} >= 8 )) || { echo "LAB_PASSWORD is shorter than 8 characters"; return 1; }
-  [[ $p =~ [\'\"\\\`\$[:space:]] ]] && { echo "LAB_PASSWORD contains a character that the lab does not accept (' \" \\ \` \$ or white space)"; return 1; }
+  [[ -z $p || $p == "$LAB_PASSWORD_PLACEHOLDER" ]] && {
+    echo "LAB_PASSWORD is not set (empty or the placeholder $LAB_PASSWORD_PLACEHOLDER)"
+    return 1
+  }
+  ((${#p} >= 8)) || {
+    echo "LAB_PASSWORD is shorter than 8 characters"
+    return 1
+  }
+  [[ $p =~ [\'\"\\\`\$[:space:]] ]] && {
+    echo "LAB_PASSWORD contains a character that the lab does not accept (' \" \\ \` \$ or white space)"
+    return 1
+  }
   local lp=${p,,}
-  [[ $lp == *administrator* || $lp == *sqlsvc* ]] && { echo "LAB_PASSWORD contains an account name (Administrator or sqlsvc)"; return 1; }
-  [[ $p =~ [A-Z] ]] && n=$((n + 1)); [[ $p =~ [a-z] ]] && n=$((n + 1))
-  [[ $p =~ [0-9] ]] && n=$((n + 1)); [[ $p =~ [^A-Za-z0-9] ]] && n=$((n + 1))
-  (( n >= 3 )) || { echo "LAB_PASSWORD has only $n of the 4 character classes (needs 3)"; return 1; }
+  [[ $lp == *administrator* || $lp == *sqlsvc* ]] && {
+    echo "LAB_PASSWORD contains an account name (Administrator or sqlsvc)"
+    return 1
+  }
+  [[ $p =~ [A-Z] ]] && n=$((n + 1))
+  [[ $p =~ [a-z] ]] && n=$((n + 1))
+  [[ $p =~ [0-9] ]] && n=$((n + 1))
+  [[ $p =~ [^A-Za-z0-9] ]] && n=$((n + 1))
+  ((n >= 3)) || {
+    echo "LAB_PASSWORD has only $n of the 4 character classes (needs 3)"
+    return 1
+  }
   return 0
 }

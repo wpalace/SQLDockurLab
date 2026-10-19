@@ -13,10 +13,11 @@ Write-Step "Service account $($c.sqlServiceUser)"
 for ($i = 0; -not (Get-ADUser -Filter "SamAccountName -eq '$($c.sqlServiceUser)'" -ErrorAction SilentlyContinue); $i++) {
     if ($i -ge 60) { throw "could not create $($c.sqlServiceUser): RID pool not available" }
     if ($i -gt 0) { Write-Host "    waiting for RID pool ($i)"; Start-Sleep -Seconds 10 }
-    try { New-ADUser -Name $c.sqlServiceUser -SamAccountName $c.sqlServiceUser -UserPrincipalName "$($c.sqlServiceUser)@$($c.domain)" `
-        -AccountPassword (ConvertTo-SecureString $c.password -AsPlainText -Force) -Enabled $true `
-        -PasswordNeverExpires $true -CannotChangePassword $true -Description 'SQL Server service account (lab)' -ErrorAction Stop }
-    catch { Write-Host "    New-ADUser: $($_.Exception.Message)" }
+    try {
+        New-ADUser -Name $c.sqlServiceUser -SamAccountName $c.sqlServiceUser -UserPrincipalName "$($c.sqlServiceUser)@$($c.domain)" `
+            -AccountPassword (ConvertTo-SecureString $c.password -AsPlainText -Force) -Enabled $true `
+            -PasswordNeverExpires $true -CannotChangePassword $true -Description 'SQL Server service account (lab)' -ErrorAction Stop 
+    } catch { Write-Host "    New-ADUser: $($_.Exception.Message)" }
 }
 # Let the service account register its own SPNs (avoids Kerberos SPN warnings / NTLM fallback).
 dsacls.exe (Get-ADUser $c.sqlServiceUser).DistinguishedName /G "SELF:RPWP;servicePrincipalName" | Out-Null

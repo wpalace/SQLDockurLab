@@ -88,7 +88,8 @@ Lab SSH key (Secret Manager secret sqlag-lab-ssh-key; not in the bucket, not in 
 
 # ------------------------------------------------------------------------ tools --
 function Need([string]$Exe, [string]$Hint) { if (-not (Get-Command $Exe -ErrorAction SilentlyContinue)) { Die "$Exe not found. $Hint" } }
-function Invoke-Native {  # run a native command; throw when it fails (unless -AllowFail)
+function Invoke-Native {
+    # run a native command; throw when it fails (unless -AllowFail)
     param([string]$Exe, [string[]]$ArgList, [switch]$AllowFail, [switch]$Quiet)
     if ($Quiet) { & $Exe @ArgList 2>$null | Out-Null } else { & $Exe @ArgList }
     $rc = $LASTEXITCODE
@@ -127,7 +128,8 @@ function Invoke-Rcmd([string]$n, [string]$Command, [switch]$AllowFail) {
     Invoke-Gssh $n @("--command=f=`$(mktemp); echo $b | base64 -d > `$f; bash `$f < /dev/null; rc=`$?; rm -f `$f; exit `$rc")
     if ($LASTEXITCODE -and -not $AllowFail) { Die "remote command on $n failed (exit $LASTEXITCODE)" }
 }
-function Get-Rcmd([string]$n, [string]$Command) {  # output as text; $null on failure
+function Get-Rcmd([string]$n, [string]$Command) {
+    # output as text; $null on failure
     $b = [Convert]::ToBase64String([Text.Encoding]::UTF8.GetBytes(($Command -replace "`r`n", "`n")))
     $o = Invoke-Gssh $n @("--command=f=`$(mktemp); echo $b | base64 -d > `$f; bash `$f < /dev/null; rc=`$?; rm -f `$f; exit `$rc") 2>$null
     if ($LASTEXITCODE) { return $null }; ($o -join "`n")
@@ -182,7 +184,8 @@ function Get-YesFlag([string[]]$f) { if (@($f | Where-Object { $_ -in '-y', '--y
 function Invoke-Create([string]$k, [string[]]$Flags) { if (-not $k) { Die 'usage: create KEY [--yes]' }; Assert-TfVars $TfVms; Tf "-chdir=$TfVms" apply @(Get-YesFlag $Flags) "-target=google_compute_instance.lab[`"$k`"]"; Update-TfOutputs }
 function Invoke-Delete([string]$k, [string[]]$Flags) { if (-not $k) { Die 'usage: delete KEY [--yes]' }; Assert-TfVars $TfVms; Tf "-chdir=$TfVms" destroy @(Get-YesFlag $Flags) "-target=google_compute_instance.lab[`"$k`"]"; Update-TfOutputs }
 
-function Test-Tools {  # operator prerequisites (MAKE.md G1)
+function Test-Tools {
+    # operator prerequisites (MAKE.md G1)
     $fails = 0
     Ok "pwsh $($PSVersionTable.PSVersion) on $([Runtime.InteropServices.RuntimeInformation]::OSDescription)"
     if ($PSVersionTable.PSVersion.Major -lt 7) { Warn 'PowerShell 7 or later is necessary'; $fails++ }
@@ -287,7 +290,8 @@ chmod 600 /tmp/lab-password.env; touch $RemoteDir/lab.local.env; chmod 600 $Remo
 mv $RemoteDir/lab.local.env.new $RemoteDir/lab.local.env; chmod 600 $RemoteDir/lab.local.env; rm -f /tmp/lab-password.env /tmp/sql-ag-lab.bundle
 "@
 }
-function Invoke-Key([string[]]$a) {  # key push|fetch|check VM | key status
+function Invoke-Key([string[]]$a) {
+    # key push|fetch|check VM | key status
     Set-Ctx; $act = if ($a.Count) { $a[0] } else { '' }
     switch ($act) {
         { $_ -in 'push', 'fetch', 'check' } {
@@ -548,7 +552,8 @@ function Invoke-LabGcp([string[]]$Argv) {
     }
 }
 
-if ($MyInvocation.InvocationName -ne '.') {   # dot-sourcing (Pester) loads the functions only
+if ($MyInvocation.InvocationName -ne '.') {
+    # dot-sourcing (Pester) loads the functions only
     try { Invoke-LabGcp -Argv ([string[]]$args); exit 0 }
     catch {
         [Console]::Error.WriteLine("  error $($_.Exception.Message)")

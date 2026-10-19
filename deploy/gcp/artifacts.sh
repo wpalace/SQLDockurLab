@@ -24,32 +24,46 @@ PREFIX="gs://$BUCKET/sql-ag-lab"
 KEY_SECRET=${LAB_GCP_KEY_SECRET:-sqlag-lab-ssh-key}
 SQL_ISO_URL=https://download.microsoft.com/download/dea8c210-c44a-4a9d-9d80-0c81578860c5/ENU/SQLServer2025-x64-ENU-EntDev.iso
 SQL_ISO_SHA256=f78f869d44e8c2cbf93be16ce6ea52dd811636f046ded29e7a74dd1352134851
-TMP="$LAB_IMAGES_DIR/.artifacts-tmp"; mkdir -p "$TMP"
+TMP="$LAB_IMAGES_DIR/.artifacts-tmp"
+mkdir -p "$TMP"
 MAN="$TMP/manifest.tsv"
 command -v gcloud >/dev/null || die "gcloud CLI missing on this VM (Google images include it)"
 
-get_manifest() { gcloud storage cat "$PREFIX/manifest.tsv" > "$MAN" 2>/dev/null || : > "$MAN"; }
-man_field() { awk -F'\t' -v n="$1" -v f="$2" '$1 == n {print $f}' "$MAN"; }   # name field#
-put_manifest_line() { # name object sha bytes meta
+get_manifest() { gcloud storage cat "$PREFIX/manifest.tsv" >"$MAN" 2>/dev/null || : >"$MAN"; }
+man_field() { awk -F'\t' -v n="$1" -v f="$2" '$1 == n {print $f}' "$MAN"; } # name field#
+put_manifest_line() {                                                       # name object sha bytes meta
   get_manifest
-  { awk -F'\t' -v n="$1" '$1 != n' "$MAN"; printf '%s\t%s\t%s\t%s\t%s\n' "$@"; } > "$MAN.new"
+  {
+    awk -F'\t' -v n="$1" '$1 != n' "$MAN"
+    printf '%s\t%s\t%s\t%s\t%s\n' "$@"
+  } >"$MAN.new"
   gcloud storage cp -q "$MAN.new" "$PREFIX/manifest.tsv"
 }
 host_meta() { printf 'commit=%s;cpu_model=%s;machine=%s;cpu=%s;fp=%s' "$(git rev-parse --short HEAD 2>/dev/null || echo -)" \
   "$LAB_CPU_MODEL" "${LAB_GCP_MACHINE_TYPE:-?}" "$(awk -F': ' '/model name/ {gsub(/ /,"_",$2); print $2; exit}' /proc/cpuinfo)" "$(vm_fingerprint)"; }
 upload() { # name localfile object
-  local sha bytes; log "hashing $2"; sha=$(sha256sum "$2" | cut -d' ' -f1); bytes=$(stat -c %s "$2")
-  log "uploading $1 ($(( bytes / 1048576 )) MiB) -> $PREFIX/$3"
+  local sha bytes
+  log "hashing $2"
+  sha=$(sha256sum "$2" | cut -d' ' -f1)
+  bytes=$(stat -c %s "$2")
+  log "uploading $1 ($((bytes / 1048576)) MiB) -> $PREFIX/$3"
   gcloud storage cp -q "$2" "$PREFIX/$3"
-  put_manifest_line "$1" "$3" "$sha" "$bytes" "$(host_meta)"; ok "published $1 sha256=${sha:0:16}"
+  put_manifest_line "$1" "$3" "$sha" "$bytes" "$(host_meta)"
+  ok "published $1 sha256=${sha:0:16}"
 }
 download() { # name localfile -> 0 when fetched+verified, 1 when absent in bucket
-  local obj sha; obj=$(man_field "$1" 2); sha=$(man_field "$1" 3)
+  local obj sha
+  obj=$(man_field "$1" 2)
+  sha=$(man_field "$1" 3)
   [[ -n $obj ]] || return 1
   log "downloading $1 <- $PREFIX/$obj"
   gcloud storage cp -q "$PREFIX/$obj" "$2.part"
-  echo "$sha  $2.part" | sha256sum -c --quiet - || { rm -f "$2.part"; die "$1: SHA-256 mismatch"; }
-  mv "$2.part" "$2"; ok "fetched $1 (sha256 ok)"
+  echo "$sha  $2.part" | sha256sum -c --quiet - || {
+    rm -f "$2.part"
+    die "$1: SHA-256 mismatch"
+  }
+  mv "$2.part" "$2"
+  ok "fetched $1 (sha256 ok)"
 }
 
 pub_iso() { upload iso "$LAB_MEDIA_DIR/$LAB_SQL_ISO" "media/$LAB_SQL_ISO"; }
@@ -63,14 +77,26 @@ sm_fail() { # stderr-file action
       add versions (roles/secretmanager.secretVersionAdder): publisher VMs and publishers"
   elif grep -qiE 'NOT_FOUND|not found' "$1"; then
     die "secret $KEY_SECRET (or a version of it) not found: run ./lab gcp apply shared, then ./lab gcp key push VM from the host that built the base image"
-  else cat "$1" >&2; die "Secret Manager: $2 $KEY_SECRET failed"; fi
+  else
+    cat "$1" >&2
+    die "Secret Manager: $2 $KEY_SECRET failed"
+  fi
 }
 key_latest() { # FILE: write the latest key version (mode 600); prints "latest"
   # roles/secretmanager.secretAccessor allows only versions.access (not versions.get/list), so
   # the version number is not read here; the manifest line "key" names the published version.
   local err="$TMP/sm.err"
-  ( umask 077; gcloud secrets versions access latest --secret "$KEY_SECRET" > "$1" 2>"$err" ) || { rm -f "$1"; sm_fail "$err" read; }
-  [[ -s $1 ]] && grep -q 'PRIVATE KEY' "$1" || { rm -f "$1"; die "the latest version of secret $KEY_SECRET is not an SSH private key"; }
+  (
+    umask 077
+    gcloud secrets versions access latest --secret "$KEY_SECRET" >"$1" 2>"$err"
+  ) || {
+    rm -f "$1"
+    sm_fail "$err" read
+  }
+  [[ -s $1 ]] && grep -q 'PRIVATE KEY' "$1" || {
+    rm -f "$1"
+    die "the latest version of secret $KEY_SECRET is not an SSH private key"
+  }
   echo latest
 }
 pub_key() {
@@ -82,24 +108,46 @@ pub_key() {
   ok "lab SSH key published: secret $KEY_SECRET version $ver (sha256=${sha:0:16})"
 }
 fetch_key() { # [--force]: write secrets/id_ed25519(.pub) from the latest version
-  local f="$TMP/id_ed25519.sm" ver; ver=$(key_latest "$f")
+  local f="$TMP/id_ed25519.sm" ver
+  ver=$(key_latest "$f")
   if [[ -f $SSH_KEY ]] && ! cmp -s "$f" "$SSH_KEY"; then
-    [[ ${1:-} == --force ]] || { rm -f "$f"; die "the local lab key $SSH_KEY differs from secret $KEY_SECRET version $ver. The base image, checkpoints and golden snapshots accept only the key they were built with. Use --force to replace the local key"; }
+    [[ ${1:-} == --force ]] || {
+      rm -f "$f"
+      die "the local lab key $SSH_KEY differs from secret $KEY_SECRET version $ver. The base image, checkpoints and golden snapshots accept only the key they were built with. Use --force to replace the local key"
+    }
     warn "replacing the local lab key with secret $KEY_SECRET version $ver (--force)"
   fi
-  mkdir -p "$(dirname "$SSH_KEY")"; install -m 600 "$f" "$SSH_KEY"; rm -f "$f"
-  ssh-keygen -y -f "$SSH_KEY" > "$SSH_KEY.pub"; chmod 644 "$SSH_KEY.pub"
-  local want; get_manifest; want=$(man_field key 3)
+  mkdir -p "$(dirname "$SSH_KEY")"
+  install -m 600 "$f" "$SSH_KEY"
+  rm -f "$f"
+  ssh-keygen -y -f "$SSH_KEY" >"$SSH_KEY.pub"
+  chmod 644 "$SSH_KEY.pub"
+  local want
+  get_manifest
+  want=$(man_field key 3)
   [[ -z $want || $want == "$(sha256sum "$SSH_KEY" | cut -d' ' -f1)" ]] || warn "the key differs from the manifest entry (published from another host?)"
   ok "lab SSH key from Secret Manager: $KEY_SECRET version $ver"
 }
 check_key() {
-  local f="$TMP/id_ed25519.sm" ver; ver=$(key_latest "$f")
-  [[ -f $SSH_KEY ]] || { rm -f "$f"; die "no local lab key: ./lab gcp fetch VM (or artifacts.sh key fetch)"; }
-  if cmp -s "$f" "$SSH_KEY"; then rm -f "$f"; ok "local lab key = secret $KEY_SECRET version $ver"
-  else rm -f "$f"; die "local lab key differs from secret $KEY_SECRET version $ver"; fi
+  local f="$TMP/id_ed25519.sm" ver
+  ver=$(key_latest "$f")
+  [[ -f $SSH_KEY ]] || {
+    rm -f "$f"
+    die "no local lab key: ./lab gcp fetch VM (or artifacts.sh key fetch)"
+  }
+  if cmp -s "$f" "$SSH_KEY"; then
+    rm -f "$f"
+    ok "local lab key = secret $KEY_SECRET version $ver"
+  else
+    rm -f "$f"
+    die "local lab key differs from secret $KEY_SECRET version $ver"
+  fi
 }
-pub_image() { log "saving runtime image $LAB_IMAGE"; $DOCKER save "$LAB_IMAGE" | zstd -q -T0 -3 -f -o "$TMP/vm-image.tar.zst"; upload image "$TMP/vm-image.tar.zst" runtime/vm-image.tar.zst; }
+pub_image() {
+  log "saving runtime image $LAB_IMAGE"
+  $DOCKER save "$LAB_IMAGE" | zstd -q -T0 -3 -f -o "$TMP/vm-image.tar.zst"
+  upload image "$TMP/vm-image.tar.zst" runtime/vm-image.tar.zst
+}
 pub_checkpoints() {
   [[ -z "$($DOCKER ps -q -f name='^lab-sql1$')" ]] || die "run ./lab down first (checkpoints must not change while archived)"
   [[ -d "$LAB_IMAGES_DIR/checkpoints" ]] || die "no checkpoints"
@@ -123,41 +171,51 @@ cmd_status() {
   else warn "no manifest entries in $PREFIX"; fi
   # media/ objects are used by fetch even without a manifest entry (checked with the known SHA-256)
   if [[ -z $(man_field iso 2) ]]; then
-    local sz; sz=$(gcloud storage ls -l "$PREFIX/media/$LAB_SQL_ISO" 2>/dev/null | awk 'NR==1{print $1}')
-    [[ -n $sz ]] && printf '%-12s %10d  %-18s %s\n' iso-media $((sz/1048576)) "${SQL_ISO_SHA256:0:16}" "media/$LAB_SQL_ISO (no manifest entry; fetch verifies the known SHA-256)"
+    local sz
+    sz=$(gcloud storage ls -l "$PREFIX/media/$LAB_SQL_ISO" 2>/dev/null | awk 'NR==1{print $1}')
+    [[ -n $sz ]] && printf '%-12s %10d  %-18s %s\n' iso-media $((sz / 1048576)) "${SQL_ISO_SHA256:0:16}" "media/$LAB_SQL_ISO (no manifest entry; fetch verifies the known SHA-256)"
   fi
   return 0
 }
 
 cmd_fetch() {
-  local with_ckpt=0; [[ ${1:-} == --checkpoints ]] && with_ckpt=1
+  local with_ckpt=0
+  [[ ${1:-} == --checkpoints ]] && with_ckpt=1
   get_manifest
   mkdir -p "$LAB_MEDIA_DIR" "$LAB_IMAGES_DIR/base"
-  if [[ -f "$LAB_MEDIA_DIR/$LAB_SQL_ISO" ]]; then ok "ISO present"
-  elif download iso "$LAB_MEDIA_DIR/$LAB_SQL_ISO"; then :
+  if [[ -f "$LAB_MEDIA_DIR/$LAB_SQL_ISO" ]]; then
+    ok "ISO present"
+  elif download iso "$LAB_MEDIA_DIR/$LAB_SQL_ISO"; then
+    :
   elif gcloud storage cp -q "$PREFIX/media/$LAB_SQL_ISO" "$LAB_MEDIA_DIR/$LAB_SQL_ISO.part" 2>/dev/null \
-       && echo "$SQL_ISO_SHA256  $LAB_MEDIA_DIR/$LAB_SQL_ISO.part" | sha256sum -c --quiet -; then
+    && echo "$SQL_ISO_SHA256  $LAB_MEDIA_DIR/$LAB_SQL_ISO.part" | sha256sum -c --quiet -; then
     # media/ without a manifest entry (for example after a bucket cleanup): verify with the known checksum
-    mv "$LAB_MEDIA_DIR/$LAB_SQL_ISO.part" "$LAB_MEDIA_DIR/$LAB_SQL_ISO"; ok "ISO fetched from $PREFIX/media (sha256 ok)"
+    mv "$LAB_MEDIA_DIR/$LAB_SQL_ISO.part" "$LAB_MEDIA_DIR/$LAB_SQL_ISO"
+    ok "ISO fetched from $PREFIX/media (sha256 ok)"
   else
     rm -f "$LAB_MEDIA_DIR/$LAB_SQL_ISO.part"
     log "ISO not in bucket: downloading from Microsoft"
     curl -fL -o "$LAB_MEDIA_DIR/$LAB_SQL_ISO.part" "$SQL_ISO_URL"
     echo "$SQL_ISO_SHA256  $LAB_MEDIA_DIR/$LAB_SQL_ISO.part" | sha256sum -c --quiet - || die "ISO checksum mismatch"
-    mv "$LAB_MEDIA_DIR/$LAB_SQL_ISO.part" "$LAB_MEDIA_DIR/$LAB_SQL_ISO"; ok "ISO downloaded and verified"
+    mv "$LAB_MEDIA_DIR/$LAB_SQL_ISO.part" "$LAB_MEDIA_DIR/$LAB_SQL_ISO"
+    ok "ISO downloaded and verified"
   fi
   # The base image has the lab SSH key baked in: take both or neither.
-  if [[ -f "$LAB_IMAGES_DIR/base/disk.qcow2" ]]; then ok "base image present"
+  if [[ -f "$LAB_IMAGES_DIR/base/disk.qcow2" ]]; then
+    ok "base image present"
   elif [[ -n $(man_field base 2) ]]; then
     fetch_key
-    download base "$LAB_IMAGES_DIR/base/disk.qcow2"; chmod 0444 "$LAB_IMAGES_DIR/base/disk.qcow2"
+    download base "$LAB_IMAGES_DIR/base/disk.qcow2"
+    chmod 0444 "$LAB_IMAGES_DIR/base/disk.qcow2"
   else log "no base image in bucket: run ./lab build-base"; fi
-  if (( with_ckpt )); then
+  if ((with_ckpt)); then
     if [[ -n $(man_field image 2) ]] && ! $DOCKER image inspect "$LAB_IMAGE" >/dev/null 2>&1; then
-      download image "$TMP/vm-image.tar.zst"; zstd -q -dc "$TMP/vm-image.tar.zst" | $DOCKER load
+      download image "$TMP/vm-image.tar.zst"
+      zstd -q -dc "$TMP/vm-image.tar.zst" | $DOCKER load
     fi
     if [[ -n $(man_field checkpoints 2) ]]; then
-      local want; want=$(man_field checkpoints 5 | sed -n 's/.*fp=\([0-9a-f]*\).*/\1/p')
+      local want
+      want=$(man_field checkpoints 5 | sed -n 's/.*fp=\([0-9a-f]*\).*/\1/p')
       if [[ "$want" != "$(vm_fingerprint)" ]]; then
         warn "checkpoints were saved with fingerprint $want, this VM has $(vm_fingerprint)"
         warn "  (same runtime image, LAB_CPU_MODEL and lab.env are required; see MAKE.md G6); skipping"
@@ -172,19 +230,31 @@ cmd_fetch() {
 }
 
 cmd_publish() {
-  (( $# )) || die "usage: artifacts.sh publish iso|base|key|image|checkpoints|all ..."
-  local items=("$@"); [[ $1 == all ]] && items=(iso base key image checkpoints)
-  local i; for i in "${items[@]}"; do
-    case $i in iso|base|key|image|checkpoints) "pub_$i" ;; *) die "unknown item $i" ;; esac
+  (($#)) || die "usage: artifacts.sh publish iso|base|key|image|checkpoints|all ..."
+  local items=("$@")
+  [[ $1 == all ]] && items=(iso base key image checkpoints)
+  local i
+  for i in "${items[@]}"; do
+    case $i in iso | base | key | image | checkpoints) "pub_$i" ;; *) die "unknown item $i" ;; esac
   done
   [[ " ${items[*]} " == *" base "* && " ${items[*]} " != *" key "* ]] && pub_key
-  rm -f "$TMP"/*.tar "$TMP"/*.zst "$TMP"/*.sm; true
+  rm -f "$TMP"/*.tar "$TMP"/*.zst "$TMP"/*.sm
+  true
 }
 
 case ${1:-} in
   status) cmd_status ;;
-  fetch) shift; cmd_fetch "$@" ;;
+  fetch)
+    shift
+    cmd_fetch "$@"
+    ;;
   key) case ${2:-} in push) pub_key ;; fetch) fetch_key "${3:-}" ;; check) check_key ;; *) die "usage: artifacts.sh key push|fetch [--force]|check" ;; esac ;;
-  publish) shift; cmd_publish "$@" ;;
-  *) sed -n '2,13p' "$0"; exit 2 ;;
+  publish)
+    shift
+    cmd_publish "$@"
+    ;;
+  *)
+    sed -n '2,13p' "$0"
+    exit 2
+    ;;
 esac

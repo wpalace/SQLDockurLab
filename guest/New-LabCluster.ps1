@@ -15,7 +15,7 @@ if (-not $existing) {
         -AdministrativeAccessPoint ActiveDirectoryAndDns -Force -WarningAction SilentlyContinue | Out-Null
 } else { Write-Ok "Cluster $($existing.Name) already exists" }
 
-Wait-Until -What 'all cluster nodes Up' -TimeoutSeconds 600 -Condition { @(Get-ClusterNode | Where-Object State -ne 'Up').Count -eq 0 }
+Wait-Until -What 'all cluster nodes Up' -TimeoutSeconds 600 -Condition { @(Get-ClusterNode | Where-Object State -NE 'Up').Count -eq 0 }
 $missing = $nodes | Where-Object { $_ -notin @(Get-ClusterNode | ForEach-Object Name) }
 foreach ($m in $missing) { Write-Step "Adding node $m"; Add-ClusterNode -Name $m -NoStorage | Out-Null }
 

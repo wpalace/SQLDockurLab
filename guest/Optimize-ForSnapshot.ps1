@@ -10,8 +10,8 @@ foreach ($fw in 'Framework64', 'Framework') {
 }
 Write-Step 'Re-applying quiet settings (roles may have re-enabled tasks)'
 foreach ($tp in '\Microsoft\Windows\Defrag\', '\Microsoft\Windows\Server Manager\', '\Microsoft\Windows\UpdateOrchestrator\',
-                '\Microsoft\Windows\.NET Framework\', '\Microsoft\Windows\Application Experience\', '\Microsoft\Windows\Diagnosis\') {
-    Get-ScheduledTask -TaskPath $tp -ErrorAction SilentlyContinue | Where-Object State -ne 'Disabled' |
+    '\Microsoft\Windows\.NET Framework\', '\Microsoft\Windows\Application Experience\', '\Microsoft\Windows\Diagnosis\') {
+    Get-ScheduledTask -TaskPath $tp -ErrorAction SilentlyContinue | Where-Object State -NE 'Disabled' |
         ForEach-Object { try { $_ | Disable-ScheduledTask | Out-Null } catch { } }
 }
 [GC]::Collect()

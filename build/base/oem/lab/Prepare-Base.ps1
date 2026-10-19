@@ -75,12 +75,12 @@ Try-Do 'fw ssh' { Enable-NetFirewallRule -Name 'OpenSSH-Server-In-TCP' }
 Enable-NetFirewallRule -DisplayGroup 'File and Printer Sharing' -ErrorAction SilentlyContinue
 Get-NetFirewallRule -Name 'FPS-ICMP4-ERQ-In*' -ErrorAction SilentlyContinue | Enable-NetFirewallRule
 $rules = @(
-    @{ n = 'Lab-SSH-22';    p = 'TCP'; port = '22' },
-    @{ n = 'Lab-SQL-1433';  p = 'TCP'; port = '1433' },
-    @{ n = 'Lab-SQL-DAC';   p = 'TCP'; port = '1434' },
+    @{ n = 'Lab-SSH-22'; p = 'TCP'; port = '22' },
+    @{ n = 'Lab-SQL-1433'; p = 'TCP'; port = '1433' },
+    @{ n = 'Lab-SQL-DAC'; p = 'TCP'; port = '1434' },
     @{ n = 'Lab-SQL-Browser'; p = 'UDP'; port = '1434' },
     @{ n = 'Lab-HADR-5022'; p = 'TCP'; port = '5022' },
-    @{ n = 'Lab-ICMPv4';    p = 'ICMPv4'; port = $null }
+    @{ n = 'Lab-ICMPv4'; p = 'ICMPv4'; port = $null }
 )
 foreach ($x in $rules) {
     if (-not (Get-NetFirewallRule -Name $x.n -ErrorAction SilentlyContinue)) {

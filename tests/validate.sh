@@ -8,8 +8,10 @@ rc=0
 step() { printf '== %s\n' "$*"; }
 # Use a host tool when installed; otherwise run it from a container image so no host install is needed.
 tool() { # tool NAME IMAGE ENTRYPOINT ARGS...
-  local name=$1 image=$2 ep=$3; shift 3
-  if type -P "$name" >/dev/null; then command "$name" "$@"
+  local name=$1 image=$2 ep=$3
+  shift 3
+  if type -P "$name" >/dev/null; then
+    command "$name" "$@"
   else $DOCKER run --rm -v "$PWD:$PWD" -w "$PWD" --entrypoint "$ep" "$image" "$@"; fi
 }
 pwsh() { tool pwsh mcr.microsoft.com/dotnet/sdk:10.0 pwsh "$@"; }
@@ -34,7 +36,9 @@ bash -c 'source lib/password.sh; bad=0
   for p in "" "<change me>" "Ab1!" "abcdefgh1" "Abc def1!" "Abcdef1'"'"'x" "Abcd\$ef12" "MyAdministrator1!"; do password_problem "$p" >/dev/null && { echo "accepted bad: $p"; bad=1; }; done
   for p in Lab-Passw0rd "abcdefg1!" "ABCDEFG1!" "Pa#ssw0rd!2026"; do password_problem "$p" >/dev/null || { echo "refused good: $p"; bad=1; }; done
   exit $bad' || rc=1
-step xml; python3 -c "import xml.dom.minidom as m;m.parse('build/base/oem/lab/unattend-clone.xml')" || rc=1
-step python; python3 -m py_compile runtime/qmp.py && rm -rf runtime/__pycache__ || rc=1
-((rc==0)) && echo "ALL STATIC CHECKS PASSED" || echo "STATIC CHECKS FAILED"
+step xml
+python3 -c "import xml.dom.minidom as m;m.parse('build/base/oem/lab/unattend-clone.xml')" || rc=1
+step python
+python3 -m py_compile runtime/qmp.py && rm -rf runtime/__pycache__ || rc=1
+((rc == 0)) && echo "ALL STATIC CHECKS PASSED" || echo "STATIC CHECKS FAILED"
 exit $rc

@@ -111,7 +111,8 @@ Set the lab password in lab.local.env (gitignored; lab.env keeps the placeholder
   The password is baked into the base image, checkpoints and golden snapshots at build time:
   a lab built with another password needs a rebuild (MAKE.md).
 "@
-function Get-LabEnvValue([string]$Name) {  # lab.env, overridden by lab.local.env; quotes removed
+function Get-LabEnvValue([string]$Name) {
+    # lab.env, overridden by lab.local.env; quotes removed
     $v = $null
     foreach ($f in 'lab.env', 'lab.local.env') {
         $p = Join-Path $script:Root $f
@@ -126,7 +127,8 @@ function Get-LabEnvValue([string]$Name) {  # lab.env, overridden by lab.local.en
     }
     $v
 }
-function Get-LabPasswordProblem([AllowEmptyString()][AllowNull()][string]$Value) {  # $null when valid (plain text: it goes into env files)
+function Get-LabPasswordProblem([AllowEmptyString()][AllowNull()][string]$Value) {
+    # $null when valid (plain text: it goes into env files)
     $p = [string]$Value
     if (-not $p -or $p -eq $script:PasswordPlaceholder) { return "LAB_PASSWORD is not set (empty or the placeholder $script:PasswordPlaceholder)" }
     if ($p.Length -lt 8) { return 'LAB_PASSWORD is shorter than 8 characters' }
@@ -136,7 +138,8 @@ function Get-LabPasswordProblem([AllowEmptyString()][AllowNull()][string]$Value)
     if ($n -lt 3) { return "LAB_PASSWORD has only $n of the 4 character classes (needs 3)" }
     $null
 }
-function Get-LabPassword {  # checked value; stops with help when it is not valid
+function Get-LabPassword {
+    # checked value; stops with help when it is not valid
     $p = Get-LabEnvValue 'LAB_PASSWORD'
     $m = Get-LabPasswordProblem $p
     if ($m) { Stop-Lab "$m`n  $script:PasswordHelp" }
