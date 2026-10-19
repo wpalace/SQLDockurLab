@@ -13,6 +13,8 @@ Windows, Linux and macOS. The lab host (GCE VM) stays Linux and bash.
 | `lib/common.sh` `plog` / `./lab log` | `lib/LabHost.psm1` (`Write-LabProgress`, `Add-LabNote`) | same `logs/progress.log` and `TRANSCRIPT.md` lines |
 | python3 in `spawned_edit` | `Edit-Spawned` (`ConvertFrom-Json -AsHashtable`) | no python on the operator machine |
 | `gcloud compute ssh -- -N -L ...` (tunnel) | the same, started with `Start-Process`; `--open` opens the browser | consoles bind 127.0.0.1 on the VM, so IAP TCP forwarding (`start-iap-tunnel`) cannot reach them |
+| `lib/password.sh` (`password_problem`, `lab_password` in `lab-gcp`) | `lib/LabHost.psm1` (`Get-LabPasswordProblem`, `Get-LabPassword`) | same rules; `push` refuses to run without a valid `LAB_PASSWORD` in `lab.local.env` and copies it to the VM in a file |
+| `key push/fetch/check VM`, `key status` | `Invoke-Key` | the VM runs `artifacts.sh key ...` (Secret Manager); `status` uses the operator's gcloud |
 | `tests/validate.sh` | + `tests/validate.ps1`, `tests/LabGcp.Tests.ps1` | parse, PSScriptAnalyzer, Pester |
 
 ## Not converted (run on the Linux lab host)

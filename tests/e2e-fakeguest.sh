@@ -33,6 +33,7 @@ cat >> "$WORK/test.env" <<ENV
 LAB_TEST_KERNEL=/images/test/vmlinuz
 LAB_TEST_INITRD=/images/test/initrd.img
 LAB_ACCEL=${LAB_ACCEL:-kvm}
+LAB_PASSWORD='E2e-Fake-Pass1'
 ENV
 export LAB_ENV_FILE="$WORK/test.env"
 LAB="$ROOT/lab"

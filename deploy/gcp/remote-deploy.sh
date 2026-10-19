@@ -12,7 +12,11 @@ step() { printf '\n=== %s  %s\n' "$(date '+%F %T %Z')" "$*"; }
 [[ -f /etc/sql-ag-lab/gcp.env ]] && source /etc/sql-ag-lab/gcp.env
 mkdir -p logs; touch logs/progress.log   # enables ./lab watch
 if [[ -n ${LAB_GCP_CPU_MODEL:-} ]]; then
-  printf '# written by deploy/gcp/remote-deploy.sh from instance metadata\nLAB_CPU_MODEL=%s\n' "$LAB_GCP_CPU_MODEL" > lab.local.env
+  # keep the other lines (LAB_PASSWORD from ./lab gcp push); replace only LAB_CPU_MODEL
+  touch lab.local.env; chmod 600 lab.local.env
+  { grep -v -e '^LAB_CPU_MODEL=' -e '^# written by deploy/gcp/remote-deploy.sh' lab.local.env || true
+    printf '# written by deploy/gcp/remote-deploy.sh from instance metadata\nLAB_CPU_MODEL=%s\n' "$LAB_GCP_CPU_MODEL"; } > lab.local.env.new
+  mv lab.local.env.new lab.local.env; chmod 600 lab.local.env
 fi
 export LAB_WATCH=0   # no GUI on the VM: the watch terminal runs on the workstation (./lab gcp)
 step "fetch artifacts"; deploy/gcp/artifacts.sh fetch "$@"

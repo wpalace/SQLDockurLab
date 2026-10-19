@@ -22,6 +22,11 @@ die()  { printf '%s  error%s %s\n' "$_c_red" "$_c_off" "$*" >&2; plog "  ERROR $
 now_ms() { date +%s%3N; }
 elapsed() { local t0=$1; local ms=$(( $(now_ms) - t0 )); printf '%d.%01ds' $((ms / 1000)) $(((ms % 1000) / 100)); }
 
+# shellcheck source=lib/password.sh
+source "$LAB_ROOT/lib/password.sh"
+check_password() { local m; m=$(password_problem "${LAB_PASSWORD:-}") || die "$m
+  $LAB_PASSWORD_HELP"; }
+
 load_env() {
   local envfile=${LAB_ENV_FILE:-$LAB_ROOT/lab.env}
   [[ -f "$envfile" ]] || die "missing $envfile"

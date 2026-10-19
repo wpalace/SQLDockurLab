@@ -21,7 +21,7 @@ Read this file completely before you start. Do the procedures in sequence.
 - Four SQL Server 2025 nodes: SQL1 and SQL2 on 10.50.0.0/24, SQL3 and SQL4 on 10.51.0.0/24.
 - One WSFC cluster (`LABCLU`), AG `LabAG` with database `LabDB`, listener `LabAGL` at 10.50.0.60 and 10.51.0.60, port 1433.
 - Replica modes (`LAB_AG_MODES` in `lab.env`): SQL1 and SQL2 synchronous commit with automatic failover (HA). SQL3 and SQL4 asynchronous commit with manual failover (DR).
-- Passwords: see `lab.env` (`LAB_PASSWORD`). Run `./lab info` to show all connection data.
+- Password: `LAB_PASSWORD` in `lab.local.env` (section 1b). Run `./lab info` to show all connection data.
 
 ## 1a. Choose the deployment target
 
@@ -35,6 +35,23 @@ Read this file completely before you start. Do the procedures in sequence.
 | GCP | One Google Compute Engine VM | Section G: build, test, golden snapshot, stop. Then spawn clones as necessary (G10) |
 
 > **NOTE:** More targets can be added to this table. Each target makes a Linux host with KVM and Docker. Then the same lab procedure (sections 3 to 10) runs on that host.
+
+## 1b. Set the lab password
+
+1. Ask the user: "Which password do you want for the lab (domain Administrator, `sa`, SQL service account)?" Do not ask for a confirmation.
+2. Tell the user the rules. The lab refuses a password that does not obey them:
+   - 8 characters or more.
+   - Characters from 3 of these 4 classes: upper case, lower case, digits, other characters.
+   - Not these characters: `'` `"` `\` `` ` `` `$`, space.
+   - Not the account names `Administrator` or `sqlsvc`.
+3. Write the password to `lab.local.env` in the repository root. If the file has a line `LAB_PASSWORD=`, replace that line. Use single quotes: `LAB_PASSWORD='the-password'`. Run `chmod 600 lab.local.env`.
+4. Do not write the password to `lab.env`. `lab.env` is in git and keeps the placeholder `LAB_PASSWORD='<change me>'`. `lab.local.env` is not in git (`.gitignore`) and overrides `lab.env`.
+5. Do not write the password to `TRANSCRIPT.md` or to the progress log. Write only "lab password set".
+6. For the GCP target, do this step on the workstation. `./lab gcp push VM` copies the password to `lab.local.env` on the lab host.
+
+> **CAUTION:** The build writes the password into the base image, the checkpoints, and the golden snapshot. To change the password, build the base image and provision the lab again (`./lab build-base --force`, `./lab provision`). The artifacts that exist (bucket, golden snapshot) keep the old password. Use the old password with them.
+
+> **NOTE:** `./lab` (except `log`, `watch`, `doctor`, `help`) and `./lab gcp push` stop with an error if the password is not set, is the placeholder, or does not obey the rules.
 
 ## 2. Expected durations (32-thread host, NVMe, KVM)
 
@@ -181,7 +198,7 @@ Use the VS Code extension `ms-mssql.mssql` (SQL Server). Windows authentication 
 | Item | Value |
 |---|---|
 | Login | `sa` (setup uses `/SECURITYMODE=SQL`) |
-| Password | `LAB_PASSWORD` in `lab.env` |
+| Password | `LAB_PASSWORD` in `lab.local.env` (section 1b; `./lab info` shows it) |
 | Encrypt | Mandatory, with *Trust server certificate* (the lab uses self-signed certificates) |
 | Listener (local lab) | `10.50.0.60,1433` with `MultiSubnetFailover=True` (the host cannot resolve `LabAGL.lab.local`, so use the IP) |
 | SQL1-SQL4 (local lab) | `10.50.0.11`, `10.50.0.12`, `10.51.0.13`, `10.51.0.14` |
@@ -283,6 +300,7 @@ Use `./lab gcp` (bash), or install PowerShell 7 and use `./lab.ps1 gcp`. Install
    `cp -n deploy/gcp/terraform/shared/terraform.tfvars.example deploy/gcp/terraform/shared/terraform.tfvars` and
    `cp -n deploy/gcp/terraform/vms/terraform.tfvars.example deploy/gcp/terraform/vms/terraform.tfvars`.
 2. If the files existed already, show the values to the user and make sure that they are correct. Then tell the user to fill in each value marked `REQUIRED`: `project_id`, `bucket_name`, `team_members`, and the `vms` entries (`<owner>-<n>`).
+   Optional access lists in the shared `terraform.tfvars` (see the comments in the file): `publishers`, `lab_users`, `lab_key_readers`.
 3. Make sure that the user agrees to the other values: region and zone, machine type, disk size and type, spot, `public_ip`.
 4. Optional: to share Terraform state with the team, copy `backend.tf.example` to `backend.tf` in each root and set the state bucket.
 
@@ -294,11 +312,24 @@ Use `./lab gcp` (bash), or install PowerShell 7 and use `./lab.ps1 gcp`. Install
 
 1. Run `./lab gcp init shared`.
 2. Run `./lab gcp plan shared`. Show the plan to the user.
-3. Run `./lab gcp apply shared`. This makes the VPC, the subnet, Cloud NAT, the IAP SSH firewall rule, two service accounts (read and publish), and the artifact bucket.
+3. Run `./lab gcp apply shared`. This makes the VPC, the subnet, Cloud NAT, the IAP SSH firewall rule, two service accounts (read and publish), the artifact bucket, and the Secret Manager secret `sqlag-lab-ssh-key` for the lab SSH key (without a value).
 
 > **NOTE:** `apply` shows the plan and asks `Enter a value:`. Type `yes`. An agent without an interactive terminal must get approval from the user first, and then use `./lab gcp apply shared --yes` (or `vms --yes`). `--yes` adds `-auto-approve`.
 
 > **NOTE:** If the shared root exists already (another team member applied it), skip G3.
+
+#### G3.1 Access for team members
+
+Edit a list in `deploy/gcp/terraform/shared/terraform.tfvars`, then run `./lab gcp apply shared --yes` (after approval). To remove access, remove the entry and apply again.
+
+| List | Use | Grants |
+|---|---|---|
+| `team_members` | Build and operate lab VMs | `roles/compute.instanceAdmin.v1`, `roles/compute.osAdminLogin`, `roles/iap.tunnelResourceAccessor` (project); `roles/iam.serviceAccountUser` on both lab service accounts; `roles/storage.objectViewer` on the bucket; `roles/secretmanager.secretAccessor` on the key secret |
+| `publishers` | Write artifacts with their own credentials | `roles/storage.objectAdmin` and `roles/storage.legacyBucketReader` on the bucket; `roles/secretmanager.secretVersionAdder` on the key secret |
+| `lab_users` | Use a lab VM that somebody else made (for example a clone) | `roles/iap.tunnelResourceAccessor`, `roles/compute.osAdminLogin` (sudo, for group `docker`), `roles/compute.viewer` (project); `roles/iam.serviceAccountUser` on the `lab-vm` service account (OS Login needs it). No VM create, start, stop, or delete. No bucket or key access of their own: the VM reads them with its service account. |
+| `lab_key_readers` | Read the lab SSH private key outside a lab VM | `roles/secretmanager.secretAccessor` on the key secret only |
+
+> **NOTE:** The lab VM service accounts can read the key secret. The publisher service account can also add versions. The project roles apply to all VMs in the project: use a project for the lab only.
 
 ### G4. Lab host VM
 
@@ -324,6 +355,9 @@ Use `./lab gcp` (bash), or install PowerShell 7 and use `./lab.ps1 gcp`. Install
 2. If the bucket has the ISO and the base image, the deploy (G7) downloads them and does not build them.
 3. After the first complete build, publish (step G8.5) the artifacts from a VM with `publisher = true`:
    `./lab gcp publish VM iso base key` and optionally `./lab gcp publish VM image checkpoints` (run `./lab down` on the lab host first).
+4. The lab SSH key is not in the bucket. `publish VM key` (or `./lab gcp key push VM`) adds the private key `secrets/id_ed25519` of the lab host as a new version of the Secret Manager secret `sqlag-lab-ssh-key`. Terraform does not manage the versions, so the key is not in the Terraform state. `fetch` and `spawn` read the latest version (`./lab gcp key fetch VM`). `./lab gcp key check VM` compares the key on the lab host with the latest version. `./lab gcp key status` lists the versions.
+
+> **CAUTION:** The base image contains the public key of the lab SSH key. A lab host that uses the base image, the checkpoints, or a golden snapshot needs the same key. Do not push a different key unless you also rebuild and publish the base image. Key rotation (future `./lab rotate-key`, manual today): on a publisher VM, delete `secrets/id_ed25519*`, run `./lab build-base --force` and `./lab provision` (this makes a new key), run the tests, `./lab gcp publish VM iso base key image checkpoints`, make a new golden snapshot, then disable the old secret versions (`gcloud secrets versions disable N --secret sqlag-lab-ssh-key`).
 
 > **CAUTION:** Memory checkpoints restore only on a lab host with the same runtime image, the same `LAB_CPU_MODEL`, and the same `lab.env`. Use the same machine type and minimum CPU platform on all VMs that share checkpoints. With `cpu_model = "host"`, a different CPU generation makes the restore fail. The fetch step compares fingerprints and skips checkpoints that do not agree.
 
@@ -382,7 +416,8 @@ Use `./lab gcp` (bash), or install PowerShell 7 and use `./lab.ps1 gcp`. Install
    - Adds `NAME` to `deploy/gcp/terraform/vms/spawned.auto.tfvars.json` (not committed) and applies only that VM with Terraform.
    - Uses the same machine type, minimum CPU platform, network, and service account as the defaults in `terraform.tfvars`.
    - Uses a `pd-balanced` boot disk (`default_spawned_disk_type`). The build VM uses `pd-ssd` (`default_disk_type`) for the base image and the lab build.
-   - Waits for SSH and the startup script, does `./lab gcp check NAME`, and copies the repository.
+   - Waits for SSH and the startup script, does `./lab gcp check NAME`, and copies the repository and the lab password.
+   - Reads the lab SSH key from Secret Manager and makes sure that it is the key in the snapshot (`artifacts.sh key fetch`).
    - Restores golden with `LAB_UP_TIMEOUT=1800`, and does a deep health check.
 2. Options: `--disk-type pd-balanced|pd-ssd|pd-standard` (default `pd-balanced`), `--snapshot SNAPSHOT`, `--machine-type TYPE`, `--no-up` (no restore).
 3. To delete a spawned VM and its disk, run `./lab gcp destroy NAME`. Type the name to confirm, or use `--yes`. The snapshots stay.
